@@ -340,6 +340,26 @@ static esp_err_t emac_esp32_init(esp_eth_mac_t *mac)
     emac_hal_lowlevel_init(&emac->hal);
     /* init gpio used by smi interface */
     emac_esp32_init_smi_gpio(emac);
+
+    uint32_t emac_reset_pin = GPIO_NUM_12;
+    gpio_config_t io_conf;
+    // disable interrupt
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    // set as output mode
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    // bit mask of the pins that you want to set,e.g.GPIO18/19
+    io_conf.pin_bit_mask = 1ULL << emac_reset_pin;
+    // disable pull-down mode
+    io_conf.pull_down_en = 0;
+    // disable pull-up mode
+    io_conf.pull_up_en = 0;
+    // configure GPIO with the given settings
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(emac_reset_pin, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(emac_reset_pin, 1);
+
     MAC_CHECK(eth->on_state_changed(eth, ETH_STATE_LLINIT, NULL) == ESP_OK, "lowlevel init failed", err, ESP_FAIL);
     /* software reset */
     emac_hal_reset(&emac->hal);
