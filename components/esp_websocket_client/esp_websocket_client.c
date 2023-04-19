@@ -448,6 +448,10 @@ esp_err_t esp_websocket_client_destroy(esp_websocket_client_handle_t client)
     if (client == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (xSemaphoreTakeRecursive(client->lock, portMAX_DELAY) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to lock ws-client tasks, exiting the task...");
+        return ESP_FAIL;
+    }
     if (client->run) {
         esp_websocket_client_stop(client);
     }
@@ -459,6 +463,7 @@ esp_err_t esp_websocket_client_destroy(esp_websocket_client_handle_t client)
     }
     esp_websocket_client_destroy_config(client);
     esp_transport_list_destroy(client->transport_list);
+    xSemaphoreGiveRecursive(client->lock);
     vQueueDelete(client->lock);
     free(client->tx_buffer);
     free(client->rx_buffer);
