@@ -1,8 +1,8 @@
 /*  Bluetooth Mesh */
 
 /*
- * Copyright (c) 2017 Intel Corporation
- * Additional Copyright (c) 2018 Espressif Systems (Shanghai) PTE LTD
+ * SPDX-FileCopyrightText: 2017 Intel Corporation
+ * SPDX-FileContributor: 2018-2021 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -1396,13 +1396,14 @@ static struct seg_rx *seg_rx_find(struct bt_mesh_net_rx *net_rx,
             continue;
         }
 
-        /* Return newer RX context in addition to an exact match, so
-         * the calling function can properly discard an old SeqAuth.
-         * Note: in Zephyr v1.14.0, ">=" is used here which does not
-         * seem to be a right operation, hence we still use the original
-         * "==" here.
+        /* When ">=" is used, return newer RX context in addition to an exact match,
+         * so the calling function can properly discard an old SeqAuth.
          */
+#if CONFIG_BLE_MESH_DISCARD_OLD_SEQ_AUTH
+        if (rx->seq_auth >= *seq_auth) {
+#else
         if (rx->seq_auth == *seq_auth) {
+#endif
             return rx;
         }
 

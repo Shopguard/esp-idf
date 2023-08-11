@@ -1,29 +1,22 @@
-// Copyright 2017-2018 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at",
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License
+/*
+ * SPDX-FileCopyrightText: 2017-2022 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 
-// md5_digest_table d9cd89987a033ef74503daeb4dd8dd07
+// md5_digest_table 3ac9188bf7eb0a27f3f636085a260743
 // This file was generated from the file esp_efuse_table.csv. DO NOT CHANGE THIS FILE MANUALLY.
 // If you want to change some fields, you need to change esp_efuse_table.csv file
 // then run `efuse_common_table` or `efuse_custom_table` command it will generate this file.
 // To show efuse_table run the command 'show_efuse_table'.
 
 
+extern const esp_efuse_desc_t* ESP_EFUSE_WR_DIS[];
 extern const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_RD_DIS[];
 extern const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_DIS_RTC_RAM_BOOT[];
 extern const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_GROUP_1[];
@@ -52,6 +45,7 @@ extern const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_KEY4[];
 extern const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_KEY5[];
 extern const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_SYS_DATA_PART2[];
 extern const esp_efuse_desc_t* ESP_EFUSE_WR_DIS_USB_EXCHG_PINS[];
+extern const esp_efuse_desc_t* ESP_EFUSE_RD_DIS[];
 extern const esp_efuse_desc_t* ESP_EFUSE_RD_DIS_KEY0[];
 extern const esp_efuse_desc_t* ESP_EFUSE_RD_DIS_KEY1[];
 extern const esp_efuse_desc_t* ESP_EFUSE_RD_DIS_KEY2[];
@@ -101,6 +95,8 @@ extern const esp_efuse_desc_t* ESP_EFUSE_PIN_POWER_SELECTION[];
 extern const esp_efuse_desc_t* ESP_EFUSE_FLASH_TYPE[];
 extern const esp_efuse_desc_t* ESP_EFUSE_FORCE_SEND_RESUME[];
 extern const esp_efuse_desc_t* ESP_EFUSE_SECURE_VERSION[];
+extern const esp_efuse_desc_t* ESP_EFUSE_DISABLE_WAFER_VERSION_MAJOR[];
+extern const esp_efuse_desc_t* ESP_EFUSE_DISABLE_BLK_VERSION_MAJOR[];
 extern const esp_efuse_desc_t* ESP_EFUSE_MAC_FACTORY[];
 extern const esp_efuse_desc_t* ESP_EFUSE_SPI_PAD_CONFIG_CLK[];
 extern const esp_efuse_desc_t* ESP_EFUSE_SPI_PAD_CONFIG_Q_D1[];
@@ -113,13 +109,16 @@ extern const esp_efuse_desc_t* ESP_EFUSE_SPI_PAD_CONFIG_D4[];
 extern const esp_efuse_desc_t* ESP_EFUSE_SPI_PAD_CONFIG_D5[];
 extern const esp_efuse_desc_t* ESP_EFUSE_SPI_PAD_CONFIG_D6[];
 extern const esp_efuse_desc_t* ESP_EFUSE_SPI_PAD_CONFIG_D7[];
-extern const esp_efuse_desc_t* ESP_EFUSE_WAFER_VERSION[];
+extern const esp_efuse_desc_t* ESP_EFUSE_WAFER_VERSION_MAJOR[];
+extern const esp_efuse_desc_t* ESP_EFUSE_WAFER_VERSION_MINOR[];
+extern const esp_efuse_desc_t* ESP_EFUSE_FLASH_VERSION[];
+extern const esp_efuse_desc_t* ESP_EFUSE_BLK_VERSION_MAJOR[];
+extern const esp_efuse_desc_t* ESP_EFUSE_PSRAM_VERSION[];
 extern const esp_efuse_desc_t* ESP_EFUSE_PKG_VERSION[];
-extern const esp_efuse_desc_t* ESP_EFUSE_BLOCK1_VERSION[];
-extern const esp_efuse_desc_t* ESP_EFUSE_SYS_DATA_PART0[];
 extern const esp_efuse_desc_t* ESP_EFUSE_OPTIONAL_UNIQUE_ID[];
-extern const esp_efuse_desc_t* ESP_EFUSE_BLOCK2_VERSION[];
+extern const esp_efuse_desc_t* ESP_EFUSE_BLK_VERSION_MINOR[];
 extern const esp_efuse_desc_t* ESP_EFUSE_USER_DATA[];
+extern const esp_efuse_desc_t* ESP_EFUSE_USER_DATA_MAC_CUSTOM[];
 extern const esp_efuse_desc_t* ESP_EFUSE_KEY0[];
 extern const esp_efuse_desc_t* ESP_EFUSE_KEY1[];
 extern const esp_efuse_desc_t* ESP_EFUSE_KEY2[];

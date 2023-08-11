@@ -1,8 +1,8 @@
 /*  Bluetooth Mesh */
 
 /*
- * Copyright (c) 2017 Intel Corporation
- * Additional Copyright (c) 2018 Espressif Systems (Shanghai) PTE LTD
+ * SPDX-FileCopyrightText: 2017 Intel Corporation
+ * SPDX-FileContributor: 2018-2021 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -95,7 +95,6 @@ struct bt_mesh_friend {
     uint8_t  fsn:1,
              send_last:1,
              pending_req:1,
-             sec_update:1,
              pending_buf:1,
              valid:1,
              established:1;

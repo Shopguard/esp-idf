@@ -310,14 +310,10 @@ tBTM_STATUS BTM_SetSsrParams (BD_ADDR remote_bda, UINT16 max_lat,
                               UINT16 min_rmt_to, UINT16 min_loc_to)
 {
 #if (BTM_SSR_INCLUDED == TRUE)
-    int acl_ind;
     tBTM_PM_MCB *p_cb;
     tACL_CONN *p_acl_cb = NULL;
 
-    if ( (acl_ind = btm_pm_find_acl_ind(remote_bda)) == MAX_L2CAP_LINKS) {
-        return (BTM_UNKNOWN_ADDR);
-    }
-    p_acl_cb = btm_bda_to_acl(remote_bda);
+    p_acl_cb = btm_bda_to_acl(remote_bda, BT_TRANSPORT_BR_EDR);
     if (!p_acl_cb) {
         return (BTM_UNKNOWN_ADDR);
     }
@@ -709,6 +705,9 @@ void btm_pm_proc_cmd_status(UINT8 status)
 
 
     p_acl_cb = btm_handle_to_acl(btm_cb.pm_pend_link_hdl);
+    if (p_acl_cb == NULL) {
+        return;
+    }
     p_cb = p_acl_cb->p_pm_mode_db;
 
     if (status == HCI_SUCCESS) {
@@ -838,7 +837,7 @@ void btm_pm_proc_ssr_evt (UINT8 *p, UINT16 evt_len)
     UINT8       status;
     UINT16      handle;
     UINT16      max_rx_lat;
-    int         xx, yy;
+    int         xx;
     tBTM_PM_MCB *p_cb;
     tACL_CONN   *p_acl = NULL;
     UINT16      use_ssr = TRUE;
@@ -862,10 +861,10 @@ void btm_pm_proc_ssr_evt (UINT8 *p, UINT16 evt_len)
     }
 
     /* notify registered parties */
-    for (yy = 0; yy < BTM_MAX_PM_RECORDS; yy++) {
-        if (btm_cb.pm_reg_db[yy].mask & BTM_PM_REG_NOTIF) {
+    for (xx = 0; xx < BTM_MAX_PM_RECORDS; xx++) {
+        if (btm_cb.pm_reg_db[xx].mask & BTM_PM_REG_NOTIF) {
             if ( p_acl) {
-                (*btm_cb.pm_reg_db[yy].cback)( p_acl->remote_addr, BTM_PM_STS_SSR, use_ssr, status);
+                (*btm_cb.pm_reg_db[xx].cback)( p_acl->remote_addr, BTM_PM_STS_SSR, use_ssr, status);
             }
         }
     }

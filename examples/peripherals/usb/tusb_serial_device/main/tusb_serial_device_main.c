@@ -20,7 +20,7 @@
 #include "sdkconfig.h"
 
 static const char *TAG = "example";
-static uint8_t buf[CONFIG_USB_CDC_RX_BUFSIZE + 1];
+static uint8_t buf[CONFIG_TINYUSB_CDC_RX_BUFSIZE + 1];
 
 void tinyusb_cdc_rx_callback(int itf, cdcacm_event_t *event)
 {
@@ -28,7 +28,7 @@ void tinyusb_cdc_rx_callback(int itf, cdcacm_event_t *event)
     size_t rx_size = 0;
 
     /* read */
-    esp_err_t ret = tinyusb_cdcacm_read(itf, buf, CONFIG_USB_CDC_RX_BUFSIZE, &rx_size);
+    esp_err_t ret = tinyusb_cdcacm_read(itf, buf, CONFIG_TINYUSB_CDC_RX_BUFSIZE, &rx_size);
     if (ret == ESP_OK) {
         buf[rx_size] = '\0';
         ESP_LOGI(TAG, "Got data (%d bytes): %s", rx_size, buf);
@@ -54,7 +54,7 @@ void app_main(void)
     tinyusb_config_t tusb_cfg = {}; // the configuration using default values
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
 
-    tinyusb_config_cdcacm_t amc_cfg = {
+    tinyusb_config_cdcacm_t acm_cfg = {
         .usb_dev = TINYUSB_USBDEV_0,
         .cdc_port = TINYUSB_CDC_ACM_0,
         .rx_unread_buf_sz = 64,
@@ -64,7 +64,7 @@ void app_main(void)
         .callback_line_coding_changed = NULL
     };
 
-    ESP_ERROR_CHECK(tusb_cdc_acm_init(&amc_cfg));
+    ESP_ERROR_CHECK(tusb_cdc_acm_init(&acm_cfg));
     /* the second way to register a callback */
     ESP_ERROR_CHECK(tinyusb_cdcacm_register_callback(
                         TINYUSB_CDC_ACM_0,

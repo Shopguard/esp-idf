@@ -103,7 +103,8 @@ struct esp_flash_t {
     uint32_t size;                   ///< Size of SPI flash in bytes. If 0, size will be detected during initialisation.
     uint32_t chip_id;               ///< Detected chip id.
     uint32_t busy             :1;   ///< This flag is used to verify chip's status.
-    uint32_t reserved_flags   :31;  ///< reserved.
+    uint32_t hpm_dummy_ena    :1;   ///< This flag is used to verify whether flash works under HPM status.
+    uint32_t reserved_flags   :30;  ///< reserved.
 };
 
 
@@ -155,6 +156,19 @@ esp_err_t esp_flash_read_id(esp_flash_t *chip, uint32_t *out_id);
  * @return ESP_OK on success, or a flash error code if operation failed.
  */
 esp_err_t esp_flash_get_size(esp_flash_t *chip, uint32_t *out_size);
+
+/** @brief Read flash unique ID via the common "RDUID" SPI flash command.
+ *
+ * @param chip Pointer to identify flash chip. Must have been successfully initialised via esp_flash_init().
+ * @param[out] out_id Pointer to receive unique ID value.
+ *
+ * ID is a 64-bit value.
+ *
+ * @return
+ *      - ESP_OK on success, or a flash error code if operation failed.
+ *      - ESP_ERR_NOT_SUPPORTED if the chip doesn't support read id.
+ */
+esp_err_t esp_flash_read_unique_chip_id(esp_flash_t *chip, uint64_t *out_id);
 
 /** @brief Erase flash chip contents
  *

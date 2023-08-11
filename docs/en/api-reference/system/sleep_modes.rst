@@ -1,6 +1,8 @@
 Sleep Modes
 ===========
 
+{IDF_TARGET_SPI_POWER_DOMAIN:default="VDD_SPI", esp32="VDD_SDIO"}
+
 Overview
 --------
 
@@ -56,7 +58,7 @@ This wakeup mode doesn't require RTC peripherals or RTC memories to be powered o
 
 :cpp:func:`esp_sleep_enable_timer_wakeup` function can be used to enable deep sleep wakeup using a timer.
 
-.. only:: SOC_TOUCH_PAD_WAKE_SUPPORTED
+.. only:: SOC_PM_SUPPORT_TOUCH_SENSOR_WAKEUP
 
     Touch pad
     ^^^^^^^^^
@@ -132,6 +134,15 @@ This wakeup mode doesn't require RTC peripherals or RTC memories to be powered o
 
     :cpp:func:`esp_sleep_enable_gpio_wakeup` function can be used to enable this wakeup source.
 
+    .. warning::
+        Before entering light sleep mode, check if any GPIO pin to be driven is part of the {IDF_TARGET_SPI_POWER_DOMAIN} power domain. If so, this power domain must be configured to remain ON during sleep.
+        
+        For example, on ESP32-WROOM-32 board, GPIO16 and GPIO17 are linked to {IDF_TARGET_SPI_POWER_DOMAIN} power domain. If they are configured to remain high during
+        light sleep, the power domain should be configured to remain powered ON. This can be done with :cpp:func:`esp_sleep_pd_config()`::
+
+            esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_ON);
+
+
 UART wakeup (light sleep only)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -156,6 +167,36 @@ By default, :cpp:func:`esp_deep_sleep_start` and :cpp:func:`esp_light_sleep_star
 .. only:: not SOC_RTC_SLOW_MEM_SUPPORTED
 
     In {IDF_TARGET_NAME} there is only RTC fast memory, so if some variables in the program are marked by ``RTC_DATA_ATTR``, ``RTC_SLOW_ATTR`` or ``RTC_FAST_ATTR`` attributes, all of them go to RTC fast memory. It will be kept powered on by default. This can be overridden using :cpp:func:`esp_sleep_pd_config` function, if desired.
+
+Power-down of Flash
+-------------------
+
+By default, to avoid potential issues, :cpp:func:`esp_light_sleep_start` function will **not** power down flash. To be more specific, it takes time to power down the flash and during this period the system may be woken up, which then actually powers up the flash before this flash could be powered down completely. As a result, there is a chance that the flash may not work properly.
+
+So, in theory, it's ok if you only wake up the system after the flash is completely powered down. However, in reality, the flash power-down period can be hard to predict (for example, this period can be much longer when you add filter capacitors to the flash's power supply circuit) and uncontrollable (for example, the asynchronous wake-up signals make the actual sleep time uncontrollable).
+
+.. warning::
+    If a filter capacitor is added to your flash power supply circuit, please do everything possible to avoid powering down flash.
+
+Therefore, it's recommended not to power down flash when using ESP-IDF. For power-sensitive applications, it's recommended to use Kconfig option :ref:`CONFIG_ESP_SLEEP_FLASH_LEAKAGE_WORKAROUND` to reduce the power consumption of the flash during light sleep, instead of powering down the flash.
+
+.. only:: SOC_SPIRAM_SUPPORTED
+
+    It is worth mentioning that PSRAM has a similar Kconfig option :ref:`CONFIG_ESP_SLEEP_PSRAM_LEAKAGE_WORKAROUND`.
+
+However, for those who have fully understood the risk and are still willing to power down the flash to further reduce the power consumption, please check the following mechanisms:
+
+    .. list::
+
+        - Setting Kconfig option :ref:`CONFIG_ESP_SLEEP_POWER_DOWN_FLASH` only powers down the flash when the RTC timer is the only wake-up source **and** the sleep time is longer than the flash power-down period.
+        - Calling ``esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_OFF)`` powers down flash when the RTC timer is not enabled as a wakeup source **or** the sleep time is longer than the flash power-down period.
+
+.. note::
+
+    .. list::
+
+        - ESP-IDF does not provide any mechanism that can power down the flash in all conditions when light sleep.
+        - :cpp:func:`esp_deep_sleep_start` function will force power down flash regardless of user configuration.
 
 Entering light sleep
 --------------------
@@ -215,10 +256,6 @@ Implementation of basic functionality of deep sleep is shown in :example:`protoc
 .. only:: SOC_ULP_SUPPORTED
 
     More extensive example in :example:`system/deep_sleep` illustrates usage of various deep sleep wakeup triggers and ULP coprocessor programming.
-
-.. only:: esp32c3
-
-    An example in :example:`system/deep_sleep` illustrates usage of deep sleep wakeup triggered by timer.
 
 API Reference
 -------------

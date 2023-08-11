@@ -1,26 +1,13 @@
 #!/usr/bin/env python
 #
+# SPDX-FileCopyrightText: 2019-2021 Espressif Systems (Shanghai) CO LTD
+#
+# SPDX-License-Identifier: Apache-2.0
+#
 # 'idf.py' is a top-level config/build command line tool for ESP-IDF
 #
 # You don't have to use idf.py, you can use cmake directly
 # (or use cmake in an IDE)
-#
-#
-#
-# Copyright 2019 Espressif Systems (Shanghai) PTE LTD
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 
 # WARNING: we don't check for Python build-time dependencies until
 # check_environment() function below. If possible, avoid importing
@@ -33,6 +20,7 @@ import json
 import locale
 import os
 import os.path
+import signal
 import subprocess
 import sys
 from collections import Counter, OrderedDict
@@ -43,8 +31,9 @@ from pkgutil import iter_modules
 # idf.py extensions. Therefore, pyc file generation is turned off:
 sys.dont_write_bytecode = True
 
+import python_version_checker  # noqa: E402
 from idf_py_actions.errors import FatalError  # noqa: E402
-from idf_py_actions.tools import executable_exists, idf_version, merge_action_lists, realpath  # noqa: E402
+from idf_py_actions.tools import executable_exists, idf_version, merge_action_lists  # noqa: E402
 
 # Use this Python interpreter for any subprocesses we launch
 PYTHON = sys.executable
@@ -80,9 +69,9 @@ def check_environment():
 
     # verify that IDF_PATH env variable is set
     # find the directory idf.py is in, then the parent directory of this, and assume this is IDF_PATH
-    detected_idf_path = realpath(os.path.join(os.path.dirname(__file__), '..'))
+    detected_idf_path = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
     if 'IDF_PATH' in os.environ:
-        set_idf_path = realpath(os.environ['IDF_PATH'])
+        set_idf_path = os.path.realpath(os.environ['IDF_PATH'])
         if set_idf_path != detected_idf_path:
             print_warning(
                 'WARNING: IDF_PATH environment variable is set to %s but %s path indicates IDF directory %s. '
@@ -92,11 +81,13 @@ def check_environment():
         print_warning('Setting IDF_PATH environment variable: %s' % detected_idf_path)
         os.environ['IDF_PATH'] = detected_idf_path
 
-    # check Python version
-    if sys.version_info[0] < 3:
-        print_warning('WARNING: Support for Python 2 is deprecated and will be removed in future versions.')
-    elif sys.version_info[0] == 3 and sys.version_info[1] < 6:
-        print_warning('WARNING: Python 3 versions older than 3.6 are not supported.')
+    try:
+        # The Python compatibility check could have been done earlier (tools/detect_python.{sh,fish}) but PATH is
+        # not set for import at that time. Even if the check would be done before, the same check needs to be done
+        # here as well (for example one can call idf.py from a not properly set-up environment).
+        python_version_checker.check()
+    except RuntimeError as e:
+        raise FatalError(e)
 
     # check Python dependencies
     checks_output.append('Checking Python dependencies...')
@@ -528,8 +519,8 @@ def init_cli(verbose_output=None):
             else:
                 if 'app' in actions:
                     print_flashing_message('App', 'app')
-                if 'partition_table' in actions:
-                    print_flashing_message('Partition Table', 'partition_table')
+                if 'partition-table' in actions:
+                    print_flashing_message('Partition Table', 'partition-table')
                 if 'bootloader' in actions:
                     print_flashing_message('Bootloader', 'bootloader')
 
@@ -568,9 +559,14 @@ def init_cli(verbose_output=None):
                         default = () if option.multiple else option.default
 
                         if global_value != default and local_value != default and global_value != local_value:
-                            raise FatalError(
-                                'Option "%s" provided for "%s" is already defined to a different value. '
-                                'This option can appear at most once in the command line.' % (key, task.name))
+                            if hasattr(option, 'envvar') and option.envvar and os.getenv(option.envvar) != default:
+                                msg = (f'This option cannot be set in command line if the {option.envvar} '
+                                       'environment variable is set to a different value.')
+                            else:
+                                msg = 'This option can appear at most once in the command line.'
+
+                            raise FatalError(f'Option "{key}" provided for "{task.name}" is already defined to '
+                                             f'a different value. {msg}')
                         if local_value != default:
                             global_args[key] = local_value
 
@@ -659,22 +655,23 @@ def init_cli(verbose_output=None):
     )
     @click.option('-C', '--project-dir', default=os.getcwd(), type=click.Path())
     def parse_project_dir(project_dir):
-        return realpath(project_dir)
+        return os.path.realpath(project_dir)
+
     # Set `complete_var` to not existing environment variable name to prevent early cmd completion
     project_dir = parse_project_dir(standalone_mode=False, complete_var='_IDF.PY_COMPLETE_NOT_EXISTING')
 
     all_actions = {}
     # Load extensions from components dir
     idf_py_extensions_path = os.path.join(os.environ['IDF_PATH'], 'tools', 'idf_py_actions')
-    extension_dirs = [realpath(idf_py_extensions_path)]
+    extension_dirs = [os.path.realpath(idf_py_extensions_path)]
     extra_paths = os.environ.get('IDF_EXTRA_ACTIONS_PATH')
     if extra_paths is not None:
         for path in extra_paths.split(';'):
-            path = realpath(path)
+            path = os.path.realpath(path)
             if path not in extension_dirs:
                 extension_dirs.append(path)
 
-    extensions = {}
+    extensions = []
     for directory in extension_dirs:
         if directory and not os.path.exists(directory):
             print_warning('WARNING: Directory with idf.py extensions doesn\'t exist:\n    %s' % directory)
@@ -683,20 +680,22 @@ def init_cli(verbose_output=None):
         sys.path.append(directory)
         for _finder, name, _ispkg in sorted(iter_modules([directory])):
             if name.endswith('_ext'):
-                extensions[name] = import_module(name)
+                extensions.append((name, import_module(name)))
 
-    # Load component manager if available and not explicitly disabled
-    if os.getenv('IDF_COMPONENT_MANAGER', None) != '0':
-        try:
-            from idf_component_manager import idf_extensions
+    # Load component manager idf.py extensions if not explicitly disabled
+    if os.getenv('IDF_COMPONENT_MANAGER') != '0':
+        from idf_component_manager import idf_extensions
+        extensions.append(('component_manager_ext', idf_extensions))
 
-            extensions['component_manager_ext'] = idf_extensions
-            os.environ['IDF_COMPONENT_MANAGER'] = '1'
+    # Optional load `pyclang` for additional clang-tidy related functionalities
+    try:
+        from pyclang import idf_extension
 
-        except ImportError:
-            pass
+        extensions.append(('idf_clang_tidy_ext', idf_extension))
+    except ImportError:
+        pass
 
-    for name, extension in extensions.items():
+    for name, extension in extensions:
         try:
             all_actions = merge_action_lists(all_actions, extension.action_extensions(all_actions, project_dir))
         except AttributeError:
@@ -709,7 +708,8 @@ def init_cli(verbose_output=None):
             from idf_ext import action_extensions
         except ImportError:
             print_warning('Error importing extension file idf_ext.py. Skipping.')
-            print_warning("Please make sure that it contains implementation (even if it's empty) of add_action_extensions")
+            print_warning(
+                "Please make sure that it contains implementation (even if it's empty) of add_action_extensions")
 
         try:
             all_actions = merge_action_lists(all_actions, action_extensions(all_actions, project_dir))
@@ -723,7 +723,16 @@ def init_cli(verbose_output=None):
     return CLI(help=cli_help, verbose_output=verbose_output, all_actions=all_actions)
 
 
+def signal_handler(_signal, _frame):
+    # The Ctrl+C processed by other threads inside
+    pass
+
+
 def main():
+
+    # Processing of Ctrl+C event for all threads made by main()
+    signal.signal(signal.SIGINT, signal_handler)
+
     checks_output = check_environment()
     cli = init_cli(verbose_output=checks_output)
     # the argument `prog_name` must contain name of the file - not the absolute path to it!

@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import division, print_function
 
 import csv
@@ -9,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+from test_utils import Py23TestCase
 
 try:
     import gen_esp32part
@@ -59,18 +63,6 @@ def _strip_trailing_ffs(binary_table):
     return binary_table
 
 
-class Py23TestCase(unittest.TestCase):
-
-    def __init__(self, *args, **kwargs):
-        super(Py23TestCase, self).__init__(*args, **kwargs)
-        try:
-            self.assertRaisesRegex
-        except AttributeError:
-            # assertRaisesRegexp is deprecated in Python3 but assertRaisesRegex doesn't exist in Python2
-            # This fix is used in order to avoid using the alias from the six library
-            self.assertRaisesRegex = self.assertRaisesRegexp
-
-
 class CSVParserTests(Py23TestCase):
 
     def test_simple_partition(self):
@@ -98,7 +90,7 @@ myota_0, 0, 0x10,, 0x100000
 myota_1, 0, 0x11,, 0x100000
 myota_15, 0, 0x1f,, 0x100000
 mytest, 0, 0x20,, 0x100000
-myota_status, 1, 0,, 0x100000
+myota_status, 1, 0,, 0x2000
         """
         csv_nomagicnumbers = """
 # Name, Type, SubType, Offset, Size
@@ -107,7 +99,7 @@ myota_0, app, ota_0,, 0x100000
 myota_1, app, ota_1,, 0x100000
 myota_15, app, ota_15,, 0x100000
 mytest, app, test,, 0x100000
-myota_status, data, ota,, 0x100000
+myota_status, data, ota,, 0x2000
 """
         # make two equivalent partition tables, one using
         # magic numbers and one using shortcuts. Ensure they match
@@ -228,6 +220,30 @@ first, app, factory,, 1M, encrypted
         tb = _strip_trailing_ffs(t.to_binary())
         tr = gen_esp32part.PartitionTable.from_binary(tb)
         self.assertTrue(tr[0].encrypted)
+
+    def test_only_empty_subtype_is_not_0(self):
+        csv_txt = """
+# Name,Type, SubType,Offset,Size
+nvs,            data,    nvs,          , 0x4000,
+otadata,        data,    ota,          , 0x2000,
+phy_init,       data,    phy,          , 0x1000,
+factory,        app, factory,          , 1M
+ota_0,             0,  ota_0,          , 1M,
+ota_1,             0,  ota_1,          , 1M,
+storage,        data,       ,          , 512k,
+storage2,       data, undefined,       , 12k,
+"""
+        t = gen_esp32part.PartitionTable.from_csv(csv_txt)
+        t.verify()
+        self.assertEqual(t[1].name,   'otadata')
+        self.assertEqual(t[1].type,    1)
+        self.assertEqual(t[1].subtype, 0)
+        self.assertEqual(t[6].name,   'storage')
+        self.assertEqual(t[6].type,    1)
+        self.assertEqual(t[6].subtype, 0x06)
+        self.assertEqual(t[7].name,   'storage2')
+        self.assertEqual(t[7].type,    1)
+        self.assertEqual(t[7].subtype, 0x06)
 
 
 class BinaryParserTests(Py23TestCase):
@@ -373,6 +389,38 @@ class CommandLineTests(Py23TestCase):
 
 class VerificationTests(Py23TestCase):
 
+    def _run_genesp32(self, csvcontents, args):
+        csvpath = tempfile.mktemp()
+        with open(csvpath, 'w') as f:
+            f.write(csvcontents)
+        try:
+            output = subprocess.check_output([sys.executable, '../gen_esp32part.py', csvpath] + args, stderr=subprocess.STDOUT)
+            return output.strip()
+        except subprocess.CalledProcessError as e:
+            return e.output.strip()
+        finally:
+            os.remove(csvpath)
+
+    def test_check_secure_app_size(self):
+        sample_csv = """
+ota_0,  app, ota_0, ,  0x101000
+ota_1,  app, ota_1, ,  0x100800
+        """
+
+        def rge(args):
+            return self._run_genesp32(sample_csv, args)
+
+        # Valid test that would pass with the above partition table
+        partfile = tempfile.mktemp()
+        self.assertEqual(rge([partfile]), b'Parsing CSV input...\nVerifying table...')
+        os.remove(partfile)
+        # Failure case 1, incorrect ota_0 partition size
+        self.assertEqual(rge(['-q', '--secure', 'v1']),
+                         b'Partition ota_0 invalid: Size 0x101000 is not aligned to 0x10000')
+        # Failure case 2, incorrect ota_1 partition size
+        self.assertEqual(rge(['-q', '--secure', 'v2']),
+                         b'Partition ota_1 invalid: Size 0x100800 is not aligned to 0x1000')
+
     def test_bad_alignment(self):
         csv = """
 # Name,Type, SubType,Offset,Size
@@ -380,6 +428,46 @@ app,app, factory, 32K, 1M
 """
         with self.assertRaisesRegex(gen_esp32part.ValidationError, r'Offset.+not aligned'):
             t = gen_esp32part.PartitionTable.from_csv(csv)
+            t.verify()
+
+    def test_only_one_otadata(self):
+        csv_txt = """
+# Name,Type, SubType,Offset,Size
+nvs,            data,    nvs,          , 0x4000,
+otadata,        data,    ota,          , 0x2000,
+otadata2,       data,    ota,          , 0x2000,
+factory,        app, factory,          , 1M
+ota_0,             0,  ota_0,          , 1M,
+ota_1,             0,  ota_1,          , 1M,
+"""
+        with self.assertRaisesRegex(gen_esp32part.InputError, r'Found multiple otadata partitions'):
+            t = gen_esp32part.PartitionTable.from_csv(csv_txt)
+            t.verify()
+
+    def test_otadata_must_have_fixed_size(self):
+        csv_txt = """
+# Name,Type, SubType,Offset,Size
+nvs,            data,    nvs,          , 0x4000,
+otadata,        data,    ota,          , 0x3000,
+factory,        app, factory,          , 1M
+ota_0,             0,  ota_0,          , 1M,
+ota_1,             0,  ota_1,          , 1M,
+"""
+        with self.assertRaisesRegex(gen_esp32part.InputError, r'otadata partition must have size = 0x2000'):
+            t = gen_esp32part.PartitionTable.from_csv(csv_txt)
+            t.verify()
+
+    def test_app_cannot_have_empty_subtype(self):
+        csv_txt = """
+# Name,Type, SubType,Offset,Size
+nvs,            data,    nvs,          , 0x4000,
+otadata,        data,    ota,          , 0x2000,
+factory,        app,        ,          , 1M
+ota_0,             0,  ota_0,          , 1M,
+ota_1,             0,  ota_1,          , 1M,
+"""
+        with self.assertRaisesRegex(gen_esp32part.InputError, r'App partition cannot have an empty subtype'):
+            t = gen_esp32part.PartitionTable.from_csv(csv_txt)
             t.verify()
 
     def test_warnings(self):
@@ -397,8 +485,29 @@ app,app, factory, 32K, 1M
             self.assertIn('WARNING', sys.stderr.getvalue())
             self.assertIn('partition subtype', sys.stderr.getvalue())
 
+            sys.stderr = io.StringIO()
+            csv_3 = 'nvs, data, nvs, 0x8800, 32k'
+            gen_esp32part.PartitionTable.from_csv(csv_3).verify()
+            self.assertIn('WARNING', sys.stderr.getvalue())
+            self.assertIn('not aligned to 0x1000', sys.stderr.getvalue())
+
+            sys.stderr = io.StringIO()
+            csv_4 = 'factory, app, factory, 0x10000, 0x100100\n' \
+                    'nvs, data, nvs, , 32k'
+            gen_esp32part.PartitionTable.from_csv(csv_4).verify()
+            self.assertIn('WARNING', sys.stderr.getvalue())
+            self.assertIn('not aligned to 0x1000', sys.stderr.getvalue())
+
         finally:
             sys.stderr = sys.__stderr__
+
+    def test_size_error(self):
+        csv_txt = """
+factory, app, factory, 0x10000, 20M
+        """
+        with self.assertRaisesRegex(gen_esp32part.InputError, r'does not fit'):
+            t = gen_esp32part.PartitionTable.from_csv(csv_txt)
+            t.verify_size_fits(16 * 1024 * 1024)
 
 
 class PartToolTests(Py23TestCase):

@@ -1,17 +1,8 @@
-
-// Copyright 2015-2017 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdint.h>
 #include <sys/cdefs.h>
@@ -22,8 +13,8 @@
 #include "esp_log.h"
 #include "esp32s2/clk.h"
 #include "esp_clk_internal.h"
-#include "esp32s2/rom/rtc.h"
 #include "esp_rom_uart.h"
+#include "esp_rom_sys.h"
 #include "soc/system_reg.h"
 #include "soc/dport_access.h"
 #include "soc/soc.h"
@@ -51,11 +42,6 @@ static const char *TAG = "clk";
 #define RTC_XTAL_CAL_RETRY 1
 #endif
 
-/* Lower threshold for a reasonably-looking calibration value for a 32k XTAL.
- * The ideal value (assuming 32768 Hz frequency) is 1000000/32768*(2**19) = 16*10^6.
- */
-#define MIN_32K_XTAL_CAL_VAL  15000000L
-
 /* Indicates that this 32k oscillator gets input from external oscillator, rather
  * than a crystal.
  */
@@ -77,14 +63,17 @@ static void select_rtc_slow_clk(slow_clk_sel_t slow_clk);
  __attribute__((weak)) void esp_clk_init(void)
 {
     rtc_config_t cfg = RTC_CONFIG_DEFAULT();
-    RESET_REASON rst_reas;
-    rst_reas = rtc_get_reset_reason(0);
-    if (rst_reas == POWERON_RESET) {
+    soc_reset_reason_t rst_reas = esp_rom_get_reset_reason(0);
+    if (rst_reas == RESET_REASON_CHIP_POWER_ON) {
         cfg.cali_ocode = 1;
+        /* Ocode calibration will switch to XTAL frequency, need to wait for UART FIFO
+         * to be empty, to avoid garbled output.
+         */
+        if (CONFIG_ESP_CONSOLE_UART_NUM >= 0) {
+            esp_rom_uart_tx_wait_idle(CONFIG_ESP_CONSOLE_UART_NUM);
+        }
     }
     rtc_init(cfg);
-
-    assert(rtc_clk_xtal_freq_get() == RTC_XTAL_FREQ_40M);
 
     rtc_clk_fast_freq_set(RTC_FAST_FREQ_8M);
 
@@ -146,6 +135,9 @@ static void select_rtc_slow_clk(slow_clk_sel_t slow_clk);
 
 static void select_rtc_slow_clk(slow_clk_sel_t slow_clk)
 {
+#ifdef CONFIG_IDF_ENV_FPGA
+    return;
+#endif
     rtc_slow_freq_t rtc_slow_freq = slow_clk & RTC_CNTL_ANA_CLK_RTC_SEL_V;
     uint32_t cal_val = 0;
     /* number of times to repeat 32k XTAL calibration
@@ -171,7 +163,7 @@ static void select_rtc_slow_clk(slow_clk_sel_t slow_clk)
             // When SLOW_CLK_CAL_CYCLES is set to 0, clock calibration will not be performed at startup.
             if (SLOW_CLK_CAL_CYCLES > 0) {
                 cal_val = rtc_clk_cal(RTC_CAL_32K_XTAL, SLOW_CLK_CAL_CYCLES);
-                if (cal_val == 0 || cal_val < MIN_32K_XTAL_CAL_VAL) {
+                if (cal_val == 0) {
                     if (retry_32k_xtal-- > 0) {
                         continue;
                     }
@@ -214,16 +206,13 @@ __attribute__((weak)) void esp_perip_clk_init(void)
     uint32_t common_perip_clk, hwcrypto_perip_clk, wifi_bt_sdio_clk = 0;
     uint32_t common_perip_clk1 = 0;
 
-    RESET_REASON rst_reas[1];
-
-    rst_reas[0] = rtc_get_reset_reason(0);
+    soc_reset_reason_t rst_reason = esp_rom_get_reset_reason(0);
 
     /* For reason that only reset CPU, do not disable the clocks
      * that have been enabled before reset.
      */
-    if (rst_reas[0] >= TG0WDT_CPU_RESET &&
-            rst_reas[0] <= TG0WDT_CPU_RESET &&
-            rst_reas[0] != RTCWDT_BROWN_OUT_RESET) {
+    if (rst_reason == RESET_REASON_CPU0_MWDT0 || rst_reason == RESET_REASON_CPU0_SW ||
+            rst_reason == RESET_REASON_CPU0_RTC_WDT || rst_reason == RESET_REASON_CPU0_MWDT1) {
         common_perip_clk = ~DPORT_READ_PERI_REG(DPORT_PERIP_CLK_EN_REG);
         hwcrypto_perip_clk = ~DPORT_READ_PERI_REG(DPORT_PERIP_CLK_EN1_REG);
         wifi_bt_sdio_clk = ~DPORT_READ_PERI_REG(DPORT_WIFI_CLK_EN_REG);
@@ -288,11 +277,13 @@ __attribute__((weak)) void esp_perip_clk_init(void)
                         DPORT_SPI3_DMA_CLK_EN;
     common_perip_clk1 = 0;
 
+#ifndef CONFIG_IDF_ENV_FPGA
     /* Change I2S clock to audio PLL first. Because if I2S uses 160MHz clock,
      * the current is not reduced when disable I2S clock.
      */
     REG_SET_FIELD(I2S_CLKM_CONF_REG(0), I2S_CLK_SEL, I2S_CLK_AUDIO_PLL);
     REG_SET_FIELD(I2S_CLKM_CONF_REG(1), I2S_CLK_SEL, I2S_CLK_AUDIO_PLL);
+#endif // CONFIG_IDF_ENV_FPGA
 
     /* Disable some peripheral clocks. */
     DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, common_perip_clk);
@@ -316,7 +307,6 @@ __attribute__((weak)) void esp_perip_clk_init(void)
     DPORT_CLEAR_PERI_REG_MASK(DPORT_BT_LPCK_DIV_FRAC_REG, DPORT_LPCLK_SEL_8M);
     DPORT_SET_PERI_REG_MASK(DPORT_BT_LPCK_DIV_FRAC_REG, DPORT_LPCLK_SEL_RTC_SLOW);
 
-    periph_ll_reset(PERIPH_SYSTIMER_MODULE);
 
     /* Enable RNG clock. */
     periph_module_enable(PERIPH_RNG_MODULE);

@@ -91,8 +91,8 @@ typedef struct {
 /**
  * Init the peripheral and the context.
  *
- * @param hal     Context of the HAL layer.
- * @param host_id Index of the SPI peripheral. 0 for SPI1, 1 for HSPI (SPI2) and 2 for VSPI (SPI3).
+ * @param hal        Context of the HAL layer.
+ * @param hal_config Configuration of the HAL
  */
 void spi_slave_hal_init(spi_slave_hal_context_t *hal, const spi_slave_hal_config_t *hal_config);
 
@@ -150,6 +150,7 @@ void spi_slave_hal_store_result(spi_slave_hal_context_t *hal);
  */
 uint32_t spi_slave_hal_get_rcv_bitlen(spi_slave_hal_context_t *hal);
 
+#if CONFIG_IDF_TARGET_ESP32
 /**
  * Check whether we need to reset the DMA according to the status of last transactions.
  *
@@ -161,3 +162,4 @@ uint32_t spi_slave_hal_get_rcv_bitlen(spi_slave_hal_context_t *hal);
  * @return true if reset is needed, else false.
  */
 bool spi_slave_hal_dma_need_reset(const spi_slave_hal_context_t *hal);
+#endif //#if CONFIG_IDF_TARGET_ESP32

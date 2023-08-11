@@ -129,10 +129,21 @@
 #define BT_SSP_INCLUDED             TRUE
 #endif /* UC_BT_SSP_ENABLED */
 
+#if UC_BT_HID_ENABLED
+#define BT_HID_INCLUDED             TRUE
+#endif /* UC_BT_HID_ENABLED */
+
 #if UC_BT_HID_HOST_ENABLED
 #define HID_HOST_INCLUDED           TRUE
 #define BTA_HH_INCLUDED             TRUE
+#define BTC_HH_INCLUDED             TRUE
 #endif /* UC_BT_HID_HOST_ENABLED */
+
+#if UC_BT_HID_DEVICE_ENABLED
+#define HID_DEV_INCLUDED            TRUE
+#define BTA_HD_INCLUDED             TRUE
+#define BTC_HD_INCLUDED             TRUE
+#endif /* UC_BT_HID_DEVICE_ENABLED */
 
 #endif /* UC_BT_CLASSIC_ENABLED */
 
@@ -190,17 +201,23 @@
 #define GATTC_INCLUDED              FALSE
 #endif  /* UC_BT_GATTC_ENABLE */
 
-#if (UC_BT_BLUFI_ENABLE)
-#define BLUFI_INCLUDED              TRUE
-#else
-#define BLUFI_INCLUDED              FALSE
-#endif  /* UC_BT_BLUFI_ENABLE */
-
 #if (UC_BT_GATTC_ENABLE && UC_BT_GATTC_CACHE_NVS_FLASH_ENABLED)
 #define GATTC_CACHE_NVS             TRUE
 #else
 #define GATTC_CACHE_NVS             FALSE
 #endif  /* UC_BT_GATTC_ENABLE && UC_BT_GATTC_CACHE_NVS_FLASH_ENABLED */
+
+#if (UC_BT_GATTC_ENABLE && UC_BT_GATTC_CONNECT_RETRY_COUNT)
+#define GATTC_CONNECT_RETRY_COUNT             UC_BT_GATTC_CONNECT_RETRY_COUNT
+#else
+#define GATTC_CONNECT_RETRY_COUNT             0
+#endif  /* UC_BT_GATTC_ENABLE && UC_BT_GATTC_CONNECT_RETRY_COUNT */
+
+#if (GATTC_CONNECT_RETRY_COUNT > 0)
+#define GATTC_CONNECT_RETRY_EN     TRUE
+#else
+#define GATTC_CONNECT_RETRY_EN     FALSE
+#endif
 
 #if (UC_BT_SMP_ENABLE)
 #define SMP_INCLUDED                TRUE
@@ -236,6 +253,16 @@
 #define MAX_ACL_CONNECTIONS         UC_BT_ACL_CONNECTIONS
 #define GATT_MAX_PHY_CHANNEL        UC_BT_ACL_CONNECTIONS
 #endif  /* UC_BT_ACL_CONNECTIONS */
+
+#ifdef UC_BT_MULTI_CONNECTION_ENBALE
+#define BT_MULTI_CONNECTION_ENBALE  UC_BT_MULTI_CONNECTION_ENBALE
+#endif
+
+#if(BT_MULTI_CONNECTION_ENBALE && (CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32S3))
+#define BLE_CE_LEN_MIN           5
+#else
+#define BLE_CE_LEN_MIN           0
+#endif
 
 #ifdef UC_BT_BLE_ESTAB_LINK_CONN_TOUT
 #define BLE_ESTABLISH_LINK_CONNECTION_TIMEOUT UC_BT_BLE_ESTAB_LINK_CONN_TOUT
@@ -299,6 +326,14 @@
 #define BTC_SPP_INCLUDED FALSE
 #endif
 
+#ifndef BTC_HH_INCLUDED
+#define BTC_HH_INCLUDED FALSE
+#endif
+
+#ifndef BTC_HD_INCLUDED
+#define BTC_HD_INCLUDED FALSE
+#endif
+
 #ifndef SBC_DEC_INCLUDED
 #define SBC_DEC_INCLUDED FALSE
 #endif
@@ -326,6 +361,10 @@
 
 #ifndef BTA_PAN_INCLUDED
 #define BTA_PAN_INCLUDED FALSE
+#endif
+
+#ifndef BTA_HD_INCLUDED
+#define BTA_HD_INCLUDED FALSE
 #endif
 
 #ifndef BTA_HH_INCLUDED
@@ -805,8 +844,12 @@
 
 /* Maximum local device name length stored btm database.
   '0' disables storage of the local name in BTM */
-#ifndef BTM_MAX_LOC_BD_NAME_LEN
+#if UC_MAX_LOC_BD_NAME_LEN
+#define BTM_MAX_LOC_BD_NAME_LEN     UC_MAX_LOC_BD_NAME_LEN
+#define BTC_MAX_LOC_BD_NAME_LEN     BTM_MAX_LOC_BD_NAME_LEN
+#else
 #define BTM_MAX_LOC_BD_NAME_LEN     64
+#define BTC_MAX_LOC_BD_NAME_LEN     BTM_MAX_LOC_BD_NAME_LEN
 #endif
 
 /* Fixed Default String. When this is defined as null string, the device's
@@ -899,7 +942,7 @@
 /* TRUE to include Sniff Subrating */
 #if (BTA_DM_PM_INCLUDED == TRUE)
 #ifndef BTM_SSR_INCLUDED
-#define BTM_SSR_INCLUDED                FALSE
+#define BTM_SSR_INCLUDED                TRUE
 #endif
 #endif /* BTA_DM_PM_INCLUDED */
 
@@ -1145,15 +1188,27 @@
 #endif
 
 #ifndef BTM_BLE_ADV_TX_POWER
+#ifdef CONFIG_IDF_TARGET_ESP32
 #define BTM_BLE_ADV_TX_POWER {-12, -9, -6, -3, 0, 3, 6, 9}
+#else
+#define BTM_BLE_ADV_TX_POWER {-24, -21, -18, -15, -12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 18, 21}
+#endif
 #endif
 
 #ifndef BTM_TX_POWER
+#ifdef CONFIG_IDF_TARGET_ESP32
 #define BTM_TX_POWER {-12, -9, -6, -3, 0, 3, 6, 9}
+#else
+#define BTM_TX_POWER {-24, -21, -18, -15, -12, -9, -6, -3, 0, 3, 6, 9, 12, 15, 18, 21}
+#endif
 #endif
 
 #ifndef BTM_TX_POWER_LEVEL_MAX
+#ifdef CONFIG_IDF_TARGET_ESP32
 #define BTM_TX_POWER_LEVEL_MAX 7
+#else
+#define BTM_TX_POWER_LEVEL_MAX 15
+#endif
 #endif
 
 
@@ -1224,7 +1279,7 @@
 #endif
 
 #ifndef GATT_MAX_SR_PROFILES
-#define GATT_MAX_SR_PROFILES        8 /* max is 32 */
+#define GATT_MAX_SR_PROFILES        UC_CONFIG_BT_GATT_MAX_SR_PROFILES
 #endif
 
 #ifndef GATT_MAX_APPS
@@ -1356,7 +1411,11 @@
 
 /* The maximum number of attributes in each record. */
 #ifndef SDP_MAX_REC_ATTR
+#if defined(HID_DEV_INCLUDED) && (HID_DEV_INCLUDED==TRUE)
+#define SDP_MAX_REC_ATTR            25
+#else
 #define SDP_MAX_REC_ATTR            8
+#endif /* defined(HID_DEV_INCLUDED) && (HID_DEV_INCLUDED==TRUE) */
 #endif
 
 #ifndef SDP_MAX_PAD_LEN
@@ -1823,6 +1882,18 @@ Range: 2 octets
 ** HID
 **
 ******************************************************************************/
+#ifndef BT_HID_INCLUDED
+#define BT_HID_INCLUDED         FALSE
+#endif
+
+/* HID Device Role Included */
+#ifndef HID_DEV_INCLUDED
+#define HID_DEV_INCLUDED   FALSE
+#endif
+
+#ifndef HID_DEV_SUBCLASS
+#define HID_DEV_SUBCLASS   COD_MINOR_POINTING
+#endif
 
 #ifndef HID_CONTROL_BUF_SIZE
 #define HID_CONTROL_BUF_SIZE            BT_DEFAULT_BUFFER_SIZE
@@ -1830,6 +1901,14 @@ Range: 2 octets
 
 #ifndef HID_INTERRUPT_BUF_SIZE
 #define HID_INTERRUPT_BUF_SIZE          BT_DEFAULT_BUFFER_SIZE
+#endif
+
+#ifndef HID_DEV_MTU_SIZE
+#define HID_DEV_MTU_SIZE 64
+#endif
+
+#ifndef HID_DEV_FLUSH_TO
+#define HID_DEV_FLUSH_TO 0xffff
 #endif
 
 /*************************************************************************
@@ -2093,6 +2172,10 @@ The maximum number of payload octets that the local device can receive in a sing
 #define BTA_DM_AVOID_A2DP_ROLESWITCH_ON_INQUIRY FALSE
 #endif
 
+#ifndef BTA_GATTC_MAX_CACHE_CHAR
+#define BTA_GATTC_MAX_CACHE_CHAR UC_BT_GATTC_MAX_CACHE_CHAR
+#endif
+
 /******************************************************************************
 **
 ** Tracing:  Include trace header file here.
@@ -2102,12 +2185,6 @@ The maximum number of payload octets that the local device can receive in a sing
 /* Enable/disable BTSnoop memory logging */
 #ifndef BTSNOOP_MEM
 #define BTSNOOP_MEM FALSE
-#endif
-
-#if UC_BT_BLUEDROID_MEM_DEBUG
-#define HEAP_MEMORY_DEBUG   TRUE
-#else
-#define HEAP_MEMORY_DEBUG   FALSE
 #endif
 
 #if UC_HEAP_ALLOCATION_FROM_SPIRAM_FIRST

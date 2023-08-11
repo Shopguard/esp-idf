@@ -6,13 +6,13 @@ import re
 import ttfw_idf
 
 
-@ttfw_idf.idf_example_test(env_tag='Example_WIFI')
+@ttfw_idf.idf_example_test(env_tag='Example_WIFI_Protocols')
 def test_examples_icmp_echo(env, extra_data):
 
     dut = env.get_dut('icmp_echo', 'examples/protocols/icmp_echo')
     dut.start_app()
 
-    dut.expect('example_connect: Connected to')
+    dut.expect('example_connect: Connected to', timeout=60)
     dut.expect('esp>')
 
     ping_dest = os.getenv('EXAMPLE_ICMP_SERVER', 'www.espressif.com')

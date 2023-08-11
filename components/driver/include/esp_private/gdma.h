@@ -1,16 +1,8 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 // DO NOT USE THESE APIS IN ANY APPLICATIONS
 // GDMA driver is not public for end users, but for ESP-IDF developpers.
@@ -19,6 +11,7 @@
 
 #include <stdbool.h>
 #include "soc/gdma_channel.h"
+#include "hal/gdma_types.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -32,33 +25,6 @@ extern "C" {
 typedef struct gdma_channel_t *gdma_channel_handle_t;
 
 /**
- * @brief Enumeration of peripherals which have the DMA capability
- * @note Some peripheral might not be available on certain chip, please refer to `soc_caps.h` for detail.
- *
- */
-typedef enum {
-    GDMA_TRIG_PERIPH_M2M,  /*!< GDMA trigger peripheral: M2M */
-    GDMA_TRIG_PERIPH_UART, /*!< GDMA trigger peripheral: UART */
-    GDMA_TRIG_PERIPH_SPI,  /*!< GDMA trigger peripheral: SPI */
-    GDMA_TRIG_PERIPH_I2S,  /*!< GDMA trigger peripheral: I2S */
-    GDMA_TRIG_PERIPH_AES,  /*!< GDMA trigger peripheral: AES */
-    GDMA_TRIG_PERIPH_SHA,  /*!< GDMA trigger peripheral: SHA */
-    GDMA_TRIG_PERIPH_ADC,  /*!< GDMA trigger peripheral: ADC */
-    GDMA_TRIG_PERIPH_DAC,  /*!< GDMA trigger peripheral: DAC */
-    GDMA_TRIG_PERIPH_LCD,  /*!< GDMA trigger peripheral: LCD */
-    GDMA_TRIG_PERIPH_CAM   /*!< GDMA trigger peripheral: CAM */
-} gdma_trigger_peripheral_t;
-
-/**
- * @brief Enumeration of GDMA channel direction
- *
- */
-typedef enum {
-    GDMA_CHANNEL_DIRECTION_TX, /*!< GDMA channel direction: TX */
-    GDMA_CHANNEL_DIRECTION_RX, /*!< GDMA channel direction: RX */
-} gdma_channel_direction_t;
-
-/**
  * @brief Collection of configuration items that used for allocating GDMA channel
  *
  */
@@ -66,9 +32,22 @@ typedef struct {
     gdma_channel_handle_t sibling_chan; /*!< DMA sibling channel handle (NULL means having sibling is not necessary) */
     gdma_channel_direction_t direction; /*!< DMA channel direction */
     struct {
-        int reserve_sibling: 1;   /*!< If set, DMA channel allocator would prefer to allocate new channel in a new pair, and reserve sibling channel for future use */
+        int reserve_sibling: 1; /*!< If set, DMA channel allocator would prefer to allocate new channel in a new pair, and reserve sibling channel for future use */
     } flags;
 } gdma_channel_alloc_config_t;
+
+/**
+ * @brief GDMA transfer ability
+ *
+ * @note The alignment set in this structure is **not** a guarantee that gdma driver will take care of the nonalignment cases.
+ *       Actually the GDMA driver has no knowledge about the DMA buffer (address and size) used by upper layer.
+ *       So it's the responsibility of the **upper layer** to take care of the buffer address and size.
+ *
+ */
+typedef struct {
+    size_t sram_trans_align;  /*!< DMA transfer alignment for memory in SRAM, in bytes. The driver enables/disables burst mode based on this value. 0 means no alignment is required */
+    size_t psram_trans_align; /*!< DMA transfer alignment for memory in PSRAM, in bytes. The driver sets proper burst block size based on the alignment value. 0 means no alignment is required */
+} gdma_transfer_ability_t;
 
 /**
  * @brief Type of GDMA event data
@@ -86,6 +65,9 @@ typedef struct {
  * @param dma_chan GDMA channel handle, created from `gdma_new_channel`
  * @param event_data GDMA event data
  * @param user_data User registered data from `gdma_register_tx_event_callbacks` or `gdma_register_rx_event_callbacks`
+ *
+ * @return Whether a task switch is needed after the callback function returns,
+ *         this is usually due to the callback wakes up some high priority task.
  *
  */
 typedef bool (*gdma_event_callback_t)(gdma_channel_handle_t dma_chan, gdma_event_data_t *event_data, void *user_data);
@@ -115,13 +97,13 @@ typedef struct {
  */
 typedef struct {
     gdma_trigger_peripheral_t periph; /*!< Target peripheral which will trigger DMA operations */
-    int instance_id;                  /*!< Peripheral instance ID. Supported IDs are listed in `soc/gdma_channel.h`, e.g. SOC_GDMA_TRIG_PERIPH_UART0 */
+    int instance_id;                  /*!< Peripheral instance ID. Supported IDs are listed in `soc/gdma_channel.h`, e.g. SOC_GDMA_TRIG_PERIPH_UHCI0 */
 } gdma_trigger_t;
 
 /**
  * @brief Helper macro to initialize GDMA trigger
  * @note value of `peri` must be selected from `gdma_trigger_peripheral_t` enum.
- *       e.g. GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_UART,0)
+ *       e.g. GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_I2S,0)
  *
  */
 #define GDMA_MAKE_TRIGGER(peri, id) \
@@ -155,6 +137,7 @@ esp_err_t gdma_new_channel(const gdma_channel_alloc_config_t *config, gdma_chann
  * @brief Connect GDMA channel to trigger peripheral
  *
  * @note Suggest to use helper macro `GDMA_MAKE_TRIGGER` to construct parameter `trig_periph`. e.g. GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_SHA,0)
+ * @note Connecting to a peripheral will also reset the DMA FIFO and FSM automatically
  *
  * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
  * @param[in] trig_periph GDMA trigger peripheral
@@ -177,6 +160,18 @@ esp_err_t gdma_connect(gdma_channel_handle_t dma_chan, gdma_trigger_t trig_perip
  *      - ESP_FAIL: Disconnect DMA channel failed because of other error
  */
 esp_err_t gdma_disconnect(gdma_channel_handle_t dma_chan);
+
+/**
+ * @brief Set DMA channel transfer ability
+ *
+ * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
+ * @param[in] ability Transfer ability, e.g. alignment
+ * @return
+ *      - ESP_OK: Set DMA channel transfer ability successfully
+ *      - ESP_ERR_INVALID_ARG: Set DMA channel transfer ability failed because of invalid argument
+ *      - ESP_FAIL: Set DMA channel transfer ability failed because of other error
+ */
+esp_err_t gdma_set_transfer_ability(gdma_channel_handle_t dma_chan, const gdma_transfer_ability_t *ability);
 
 /**
  * @brief Apply channel strategy for GDMA channel
@@ -247,6 +242,9 @@ esp_err_t gdma_register_rx_event_callbacks(gdma_channel_handle_t dma_chan, gdma_
 /**
  * @brief Set DMA descriptor address and start engine
  *
+ * @note This function is allowed to run within ISR context
+ * @note This function is also allowed to run when Cache is disabled, if `CONFIG_GDMA_CTRL_FUNC_IN_IRAM` is enabled
+ *
  * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
  * @param[in] desc_base_addr Base address of descriptors (usually the descriptors are chained into a link or ring)
  * @return
@@ -259,6 +257,9 @@ esp_err_t gdma_start(gdma_channel_handle_t dma_chan, intptr_t desc_base_addr);
 /**
  * @brief Stop DMA engine
  *
+ * @note This function is allowed to run within ISR context
+ * @note This function is also allowed to run when Cache is disabled, if `CONFIG_GDMA_CTRL_FUNC_IN_IRAM` is enabled
+ *
  * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
  * @return
  *      - ESP_OK: Stop DMA engine successfully
@@ -269,6 +270,9 @@ esp_err_t gdma_stop(gdma_channel_handle_t dma_chan);
 
 /**
  * @brief Make the appended descriptors be aware to the DMA engine
+ *
+ * @note This function is allowed to run within ISR context
+ * @note This function is also allowed to run when Cache is disabled, if `CONFIG_GDMA_CTRL_FUNC_IN_IRAM` is enabled
  * @note This API could also resume a paused DMA engine, make sure new descriptors have been appended to the descriptor chain before calling it.
  *
  * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
@@ -278,6 +282,37 @@ esp_err_t gdma_stop(gdma_channel_handle_t dma_chan);
  *      - ESP_FAIL: Send append command to DMA engine failed because of other error
  */
 esp_err_t gdma_append(gdma_channel_handle_t dma_chan);
+
+/**
+ * @brief Reset DMA channel FIFO and internal finite state machine
+ *
+ * @note This function is allowed to run within ISR context
+ * @note This function is also allowed to run when Cache is disabled, if `CONFIG_GDMA_CTRL_FUNC_IN_IRAM` is enabled
+ * @note Resetting a DMA channel won't break the connection with the target peripheral
+ *
+ * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
+ * @return
+ *      - ESP_OK: DMA channel reset successfully
+ *      - ESP_ERR_INVALID_ARG: DMA channel reset failed due to invalid arguments
+ *      - ESP_FAIL: DMA channel reset failed due to other errors
+ */
+esp_err_t gdma_reset(gdma_channel_handle_t dma_chan);
+
+/**
+ * @brief Get the mask of free M2M trigger IDs
+ *
+ * @note On some ESP targets (e.g. ESP32C3/S3), DMA trigger used for memory copy can be any of valid peripheral's trigger ID,
+ *       which can bring conflict if the peripheral is also using the same trigger ID. This function can return the free IDs
+ *       for memory copy, at the runtime.
+ *
+ * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
+ * @param[out] mask Returned mask of free M2M trigger IDs
+ * @return
+ *      - ESP_OK: Get free M2M trigger IDs successfully
+ *      - ESP_ERR_INVALID_ARG: Get free M2M trigger IDs failed because of invalid argument
+ *      - ESP_FAIL: Get free M2M trigger IDs failed because of other error
+ */
+esp_err_t gdma_get_free_m2m_trig_id_mask(gdma_channel_handle_t dma_chan, uint32_t *mask);
 
 #ifdef __cplusplus
 }

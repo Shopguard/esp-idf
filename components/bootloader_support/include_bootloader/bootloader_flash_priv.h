@@ -1,16 +1,8 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 #ifndef __BOOTLOADER_FLASH_H
 #define __BOOTLOADER_FLASH_H
 
@@ -32,11 +24,15 @@
 #define CMD_RDID       0x9F
 #define CMD_WRSR       0x01
 #define CMD_WRSR2      0x31 /* Not all SPI flash uses this command */
+#define CMD_WRSR3      0x11 /* Not all SPI flash uses this command */
 #define CMD_WREN       0x06
+#define CMD_WRENVSR    0x50 /* Flash write enable for volatile SR bits */
 #define CMD_WRDI       0x04
 #define CMD_RDSR       0x05
 #define CMD_RDSR2      0x35 /* Not all SPI flash uses this command */
+#define CMD_RDSR3      0x15 /* Not all SPI flash uses this command */
 #define CMD_OTPEN      0x3A /* Enable OTP mode, not all SPI flash uses this command */
+#define CMD_RDSFDP     0x5A /* Read the SFDP of the flash */
 #define CMD_WRAP       0x77 /* Set burst with wrap command */
 #define CMD_RESUME     0x7A /* Resume command to clear flash suspend bit */
 
@@ -165,8 +161,25 @@ static inline uint32_t bootloader_cache_pages_to_map(uint32_t size, uint32_t vad
 uint32_t bootloader_execute_flash_command(uint8_t command, uint32_t mosi_data, uint8_t mosi_len, uint8_t miso_len);
 
 /**
+ * @brief Read the SFDP of the flash
+ *
+ * @param sfdp_addr Address of the parameter to read
+ * @param miso_byte_num Bytes to read
+ * @return The read SFDP, little endian, 4 bytes at most
+ */
+uint32_t bootloader_flash_read_sfdp(uint32_t sfdp_addr, unsigned int miso_byte_num);
+
+/**
  * @brief Enable the flash write protect (WEL bit).
  */
 void bootloader_enable_wp(void);
+
+/**
+ * @brief Once this function is called,
+ * any on-going internal operations will be terminated and the device will return to its default power-on
+ * state and lose all the current volatile settings, such as Volatile Status Register bits, Write Enable Latch
+ * (WEL) status, Program/Erase Suspend status, etc.
+ */
+void bootloader_spi_flash_reset(void);
 
 #endif

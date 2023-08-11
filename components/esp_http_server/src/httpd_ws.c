@@ -1,16 +1,8 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 
 
@@ -24,8 +16,22 @@
 
 #include <esp_http_server.h>
 #include "esp_httpd_priv.h"
+#include "freertos/event_groups.h"
 
 #ifdef CONFIG_HTTPD_WS_SUPPORT
+
+#define WS_SEND_OK      (1 << 0)
+#define WS_SEND_FAILED  (1 << 1)
+
+typedef struct {
+    httpd_ws_frame_t frame;
+    httpd_handle_t handle;
+    int socket;
+    transfer_complete_cb callback;
+    void *arg;
+    bool blocking;
+    EventGroupHandle_t transfer_done;
+} async_transfer_t;
 
 static const char *TAG="httpd_ws";
 
@@ -336,9 +342,19 @@ esp_err_t httpd_ws_recv_frame(httpd_req_t *req, httpd_ws_frame_t *frame, size_t 
         return ESP_FAIL;
     }
 
-    if (httpd_recv_with_opt(req, (char *)frame->payload, frame->len, false) <= 0) {
-        ESP_LOGW(TAG, LOG_FMT("Failed to receive payload"));
-        return ESP_FAIL;
+    size_t left_len = frame->len;
+    size_t offset = 0;
+
+    while (left_len > 0) {
+        int read_len = httpd_recv_with_opt(req, (char *)frame->payload + offset, left_len, false);
+        if (read_len <= 0) {
+            ESP_LOGW(TAG, LOG_FMT("Failed to receive payload"));
+            return ESP_FAIL;
+        }
+        offset += read_len;
+        left_len -= read_len;
+
+        ESP_LOGD(TAG, "Frame length: %d, Bytes Read: %d", frame->len, offset);
     }
 
     /* Unmask payload */
@@ -429,6 +445,12 @@ esp_err_t httpd_ws_get_frame_type(httpd_req_t *req)
         return ESP_ERR_INVALID_ARG;
     }
 
+    struct sock_db *sd = aux->sd;
+    if (sd == NULL) {
+        ESP_LOGW(TAG, LOG_FMT("Invalid sd pointer"));
+        return ESP_ERR_INVALID_ARG;
+    }
+
     /* Read the first byte from the frame to get the FIN flag and Opcode */
     /* Please refer to RFC6455 Section 5.2 for more details */
     uint8_t first_byte = 0;
@@ -447,27 +469,50 @@ esp_err_t httpd_ws_get_frame_type(httpd_req_t *req)
     aux->ws_final = (first_byte & HTTPD_WS_FIN_BIT) != 0;
     aux->ws_type = (first_byte & HTTPD_WS_OPCODE_BITS);
 
-    /* Reply to PING. For PONG and CLOSE, it will be handled elsewhere. */
-    if(aux->ws_type == HTTPD_WS_TYPE_PING) {
-        ESP_LOGD(TAG, LOG_FMT("Got a WS PING frame, Replying PONG..."));
+    /* If userspace requests control frames, do not deal with the control frames */
+    if (!sd->ws_control_frames) {
+        ESP_LOGD(TAG, LOG_FMT("Handler not requests control frames"));
 
-        /* Read the rest of the PING frame, for PONG to reply back. */
-        /* Please refer to RFC6455 Section 5.5.2 for more details */
-        httpd_ws_frame_t frame;
-        uint8_t frame_buf[128] = { 0 };
-        memset(&frame, 0, sizeof(httpd_ws_frame_t));
-        frame.payload = frame_buf;
+        /* Reply to PING. For PONG and CLOSE, it will be handled elsewhere. */
+        if (aux->ws_type == HTTPD_WS_TYPE_PING) {
+            ESP_LOGD(TAG, LOG_FMT("Got a WS PING frame, Replying PONG..."));
 
-        if(httpd_ws_recv_frame(req, &frame, 126) != ESP_OK) {
-            ESP_LOGD(TAG, LOG_FMT("Cannot receive the full PING frame"));
-            return ESP_ERR_INVALID_STATE;
+            /* Read the rest of the PING frame, for PONG to reply back. */
+            /* Please refer to RFC6455 Section 5.5.2 for more details */
+            httpd_ws_frame_t frame;
+            uint8_t frame_buf[128] = { 0 };
+            memset(&frame, 0, sizeof(httpd_ws_frame_t));
+            frame.payload = frame_buf;
+
+            if (httpd_ws_recv_frame(req, &frame, 126) != ESP_OK) {
+                ESP_LOGD(TAG, LOG_FMT("Cannot receive the full PING frame"));
+                return ESP_ERR_INVALID_STATE;
+            }
+
+            /* Now turn the frame to PONG */
+            frame.type = HTTPD_WS_TYPE_PONG;
+            return httpd_ws_send_frame(req, &frame);
+        } else if (aux->ws_type == HTTPD_WS_TYPE_CLOSE) {
+            ESP_LOGD(TAG, LOG_FMT("Got a WS CLOSE frame, Replying CLOSE..."));
+
+            /* Read the rest of the CLOSE frame and response */
+            /* Please refer to RFC6455 Section 5.5.1 for more details */
+            httpd_ws_frame_t frame;
+            uint8_t frame_buf[128] = { 0 };
+            memset(&frame, 0, sizeof(httpd_ws_frame_t));
+            frame.payload = frame_buf;
+
+            if (httpd_ws_recv_frame(req, &frame, 126) != ESP_OK) {
+                ESP_LOGD(TAG, LOG_FMT("Cannot receive the full CLOSE frame"));
+                return ESP_ERR_INVALID_STATE;
+            }
+
+            frame.len = 0;
+            frame.type = HTTPD_WS_TYPE_CLOSE;
+            frame.payload = NULL;
+            return httpd_ws_send_frame(req, &frame);
         }
-
-        /* Now turn the frame to PONG */
-        frame.type = HTTPD_WS_TYPE_PONG;
-        return httpd_ws_send_frame(req, &frame);
     }
-
     return ESP_OK;
 }
 
@@ -480,6 +525,79 @@ httpd_ws_client_info_t httpd_ws_get_fd_info(httpd_handle_t hd, int fd)
     }
     bool is_active_ws = sess->ws_handshake_done && (!sess->ws_close);
     return is_active_ws ? HTTPD_WS_CLIENT_WEBSOCKET : HTTPD_WS_CLIENT_HTTP;
+}
+
+static void httpd_ws_send_cb(void *arg)
+{
+    async_transfer_t *trans = arg;
+
+    esp_err_t err = httpd_ws_send_frame_async(trans->handle, trans->socket, &trans->frame);
+
+    if (trans->blocking) {
+        xEventGroupSetBits(trans->transfer_done, err ? WS_SEND_FAILED : WS_SEND_OK);
+    } else if (trans->callback) {
+        trans->callback(err, trans->socket, trans->arg);
+    }
+
+    free(trans);
+}
+
+esp_err_t httpd_ws_send_data(httpd_handle_t handle, int socket, httpd_ws_frame_t *frame)
+{
+    async_transfer_t *transfer = calloc(1, sizeof(async_transfer_t));
+    if (transfer == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    EventGroupHandle_t transfer_done = xEventGroupCreate();
+    if (!transfer_done) {
+        free(transfer);
+        return ESP_ERR_NO_MEM;
+    }
+
+    transfer->blocking = true;
+    transfer->handle = handle;
+    transfer->socket = socket;
+    transfer->transfer_done = transfer_done;
+    memcpy(&transfer->frame, frame, sizeof(httpd_ws_frame_t));
+
+    esp_err_t err = httpd_queue_work(handle, httpd_ws_send_cb, transfer);
+    if (err != ESP_OK) {
+        vEventGroupDelete(transfer_done);
+        free(transfer);
+        return err;
+    }
+
+    EventBits_t status = xEventGroupWaitBits(transfer_done, WS_SEND_OK | WS_SEND_FAILED,
+                                             pdTRUE, pdFALSE, portMAX_DELAY);
+
+    vEventGroupDelete(transfer_done);
+
+    return (status & WS_SEND_OK) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t httpd_ws_send_data_async(httpd_handle_t handle, int socket, httpd_ws_frame_t *frame,
+                                   transfer_complete_cb callback, void *arg)
+{
+    async_transfer_t *transfer = calloc(1, sizeof(async_transfer_t));
+    if (transfer == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    transfer->arg = arg;
+    transfer->callback = callback;
+    transfer->handle = handle;
+    transfer->socket = socket;
+    memcpy(&transfer->frame, frame, sizeof(httpd_ws_frame_t));
+
+    esp_err_t err = httpd_queue_work(handle, httpd_ws_send_cb, transfer);
+
+    if (err) {
+        free(transfer);
+        return err;
+    }
+
+    return ESP_OK;
 }
 
 #endif /* CONFIG_HTTPD_WS_SUPPORT */

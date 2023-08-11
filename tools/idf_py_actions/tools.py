@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 import os
 import re
 import subprocess
@@ -19,16 +21,6 @@ def executable_exists(args):
         return False
 
 
-def realpath(path):
-    """
-    Return the cannonical path with normalized case.
-
-    It is useful on Windows to comparision paths in case-insensitive manner.
-    On Unix and Mac OS X it works as `os.path.realpath()` only.
-    """
-    return os.path.normcase(os.path.realpath(path))
-
-
 def _idf_version_from_cmake():
     version_path = os.path.join(os.environ['IDF_PATH'], 'tools/cmake/version.cmake')
     regex = re.compile(r'^\s*set\s*\(\s*IDF_VERSION_([A-Z]{5})\s+(\d+)')
@@ -45,6 +37,11 @@ def _idf_version_from_cmake():
     except (KeyError, OSError):
         sys.stderr.write('WARNING: Cannot find ESP-IDF version in version.cmake\n')
         return None
+
+
+def get_target(path, sdkconfig_filename='sdkconfig'):
+    path = os.path.join(path, sdkconfig_filename)
+    return get_sdkconfig_value(path, 'CONFIG_IDF_TARGET')
 
 
 def idf_version():
@@ -66,7 +63,7 @@ def idf_version():
     return version
 
 
-def run_tool(tool_name, args, cwd, env=dict()):
+def run_tool(tool_name, args, cwd, env=dict(), custom_error_handler=None):
     def quote_arg(arg):
         " Quote 'arg' if necessary "
         if ' ' in arg and not (arg.startswith('"') or arg.startswith("'")):
@@ -92,16 +89,19 @@ def run_tool(tool_name, args, cwd, env=dict()):
         # Note: we explicitly pass in os.environ here, as we may have set IDF_PATH there during startup
         subprocess.check_call(args, env=env_copy, cwd=cwd)
     except subprocess.CalledProcessError as e:
-        raise FatalError('%s failed with exit code %d' % (tool_name, e.returncode))
+        if custom_error_handler:
+            custom_error_handler(e)
+        else:
+            raise FatalError('%s failed with exit code %d' % (tool_name, e.returncode))
 
 
-def run_target(target_name, args, env=dict()):
+def run_target(target_name, args, env=dict(), custom_error_handler=None):
     generator_cmd = GENERATORS[args.generator]['command']
 
     if args.verbose:
         generator_cmd += [GENERATORS[args.generator]['verbose_flag']]
 
-    run_tool(generator_cmd[0], generator_cmd + [target_name], args.build_dir, env)
+    run_tool(generator_cmd[0], generator_cmd + [target_name], args.build_dir, env, custom_error_handler)
 
 
 def _strip_quotes(value, regexp=re.compile(r"^\"(.*)\"$|^'(.*)'$|^(.*)$")):
@@ -232,10 +232,10 @@ def ensure_build_directory(args, prog_name, always_run_cmake=False):
 
     try:
         home_dir = cache['CMAKE_HOME_DIRECTORY']
-        if realpath(home_dir) != realpath(project_dir):
+        if os.path.realpath(home_dir) != os.path.realpath(project_dir):
             raise FatalError(
                 "Build directory '%s' configured for project '%s' not '%s'. Run '%s fullclean' to start again." %
-                (build_dir, realpath(home_dir), realpath(project_dir), prog_name))
+                (build_dir, os.path.realpath(home_dir), os.path.realpath(project_dir), prog_name))
     except KeyError:
         pass  # if cmake failed part way, CMAKE_HOME_DIRECTORY may not be set yet
 
@@ -277,7 +277,7 @@ def is_target_supported(project_path, supported_targets):
     """
     Returns True if the active target is supported, or False otherwise.
     """
-    return get_sdkconfig_value(os.path.join(project_path, 'sdkconfig'), 'CONFIG_IDF_TARGET') in supported_targets
+    return get_target(project_path) in supported_targets
 
 
 def _guess_or_check_idf_target(args, prog_name, cache):
@@ -290,12 +290,9 @@ def _guess_or_check_idf_target(args, prog_name, cache):
     """
     # Default locations of sdkconfig files.
     # FIXME: they may be overridden in the project or by a CMake variable (IDF-1369).
-    sdkconfig_path = os.path.join(args.project_dir, 'sdkconfig')
-    sdkconfig_defaults_path = os.path.join(args.project_dir, 'sdkconfig.defaults')
-
     # These are used to guess the target from sdkconfig, or set the default target by sdkconfig.defaults.
-    idf_target_from_sdkconfig = get_sdkconfig_value(sdkconfig_path, 'CONFIG_IDF_TARGET')
-    idf_target_from_sdkconfig_defaults = get_sdkconfig_value(sdkconfig_defaults_path, 'CONFIG_IDF_TARGET')
+    idf_target_from_sdkconfig = get_target(args.project_dir)
+    idf_target_from_sdkconfig_defaults = get_target(args.project_dir, 'sdkconfig.defaults')
     idf_target_from_env = os.environ.get('IDF_TARGET')
     idf_target_from_cache = cache.get('IDF_TARGET')
 

@@ -1,16 +1,8 @@
-// Copyright 2015-2018 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <freertos/FreeRTOS.h>
 #include <esp_system.h>
@@ -31,6 +23,7 @@ static simple_ble_cfg_t *g_ble_cfg_p;
 static uint16_t *g_gatt_table_map;
 
 static uint8_t adv_config_done;
+static esp_bd_addr_t s_cached_remote_bda = {0x0,};
 #define adv_config_flag      (1 << 0)
 #define scan_rsp_config_flag (1 << 1)
 
@@ -50,17 +43,20 @@ const uint8_t *simple_ble_get_uuid128(uint16_t handle)
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
     switch (event) {
-    case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT:
+    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
         adv_config_done &= (~adv_config_flag);
         if (adv_config_done == 0) {
             esp_ble_gap_start_advertising(&g_ble_cfg_p->adv_params);
         }
         break;
-    case ESP_GAP_BLE_SCAN_RSP_DATA_RAW_SET_COMPLETE_EVT:
+    case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:
         adv_config_done &= (~scan_rsp_config_flag);
         if (adv_config_done == 0) {
             esp_ble_gap_start_advertising(&g_ble_cfg_p->adv_params);
         }
+        break;
+    case ESP_GAP_BLE_SEC_REQ_EVT:
+        esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
         break;
     default:
         break;
@@ -99,15 +95,13 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             ESP_LOGE(TAG, "set device name failed, error code = 0x%x", ret);
             return;
         }
-        ret = esp_ble_gap_config_adv_data_raw(g_ble_cfg_p->raw_adv_data_p,
-                                              g_ble_cfg_p->raw_adv_data_len);
+        ret = esp_ble_gap_config_adv_data(g_ble_cfg_p->adv_data_p);
         if (ret) {
             ESP_LOGE(TAG, "config raw adv data failed, error code = 0x%x ", ret);
             return;
         }
         adv_config_done |= adv_config_flag;
-        ret = esp_ble_gap_config_scan_rsp_data_raw(g_ble_cfg_p->raw_scan_rsp_data_p,
-                                                   g_ble_cfg_p->raw_scan_rsp_data_len);
+        ret = esp_ble_gap_config_adv_data(g_ble_cfg_p->scan_rsp_data_p);
         if (ret) {
             ESP_LOGE(TAG, "config raw scan rsp data failed, error code = 0x%x", ret);
             return;
@@ -140,6 +134,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
         g_ble_cfg_p->connect_fn(event, gatts_if, param);
         esp_ble_conn_update_params_t conn_params = {0};
         memcpy(conn_params.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
+	memcpy(s_cached_remote_bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
         /* For the iOS system, please refer the official Apple documents about BLE connection parameters restrictions. */
         conn_params.latency = 0;
         conn_params.max_int = 0x20;    // max_int = 0x20*1.25ms = 40ms
@@ -150,6 +145,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
     case ESP_GATTS_DISCONNECT_EVT:
         ESP_LOGD(TAG, "ESP_GATTS_DISCONNECT_EVT, reason = %d", param->disconnect.reason);
         g_ble_cfg_p->disconnect_fn(event, gatts_if, param);
+        memset(s_cached_remote_bda, 0, sizeof(esp_bd_addr_t));
         esp_ble_gap_start_advertising(&g_ble_cfg_p->adv_params);
         break;
     case ESP_GATTS_CREAT_ATTR_TAB_EVT: {
@@ -225,7 +221,7 @@ esp_err_t simple_ble_start(simple_ble_cfg_t *cfg)
 
 #ifdef CONFIG_BTDM_CTRL_MODE_BTDM
     ret = esp_bt_controller_enable(ESP_BT_MODE_BTDM);
-#elif defined CONFIG_BTDM_CTRL_MODE_BLE_ONLY
+#elif defined CONFIG_BTDM_CTRL_MODE_BLE_ONLY || CONFIG_BT_CTRL_MODE_EFF
     ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
 #else
     ESP_LOGE(TAG, "Configuration mismatch. Select BLE Only or BTDM mode from menuconfig");
@@ -272,6 +268,26 @@ esp_err_t simple_ble_start(simple_ble_cfg_t *cfg)
         ESP_LOGE(TAG, "set local  MTU failed, error code = 0x%x", local_mtu_ret);
     }
     ESP_LOGD(TAG, "Free mem at end of simple_ble_init %d", esp_get_free_heap_size());
+
+    /* set the security iocap & auth_req & key size & init key response key parameters to the stack*/
+    esp_ble_auth_req_t auth_req= ESP_LE_AUTH_REQ_MITM;
+    if (cfg->ble_bonding) {
+	auth_req |= ESP_LE_AUTH_BOND;     //bonding with peer device after authentication
+    }
+    if (cfg->ble_sm_sc) {
+	auth_req |= ESP_LE_AUTH_REQ_SC_ONLY;
+    }
+    esp_ble_io_cap_t iocap = ESP_IO_CAP_NONE;           //set the IO capability to No output No input
+    uint8_t key_size = 16;      //the key size should be 7~16 bytes
+    uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    uint8_t rsp_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+
+    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth_req, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
+
     return ESP_OK;
 }
 
@@ -307,3 +323,10 @@ esp_err_t simple_ble_stop(void)
     ESP_LOGD(TAG, "Free mem at end of simple_ble_stop %d", esp_get_free_heap_size());
     return ESP_OK;
 }
+
+#ifdef CONFIG_WIFI_PROV_DISCONNECT_AFTER_PROV
+esp_err_t simple_ble_disconnect(void)
+{
+    return esp_ble_gap_disconnect(s_cached_remote_bda);
+}
+#endif

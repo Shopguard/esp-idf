@@ -1,29 +1,19 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+/*
+ * SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#ifndef _ROM_SECURE_BOOT_H_
-#define _ROM_SECURE_BOOT_H_
+#pragma once
 
 #include <stdint.h>
+#include "ets_sys.h"
 #include "rsa_pss.h"
+#include "esp_assert.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-struct ets_secure_boot_sig_block;
-struct ets_secure_boot_signature_t;
 
 typedef struct ets_secure_boot_sig_block ets_secure_boot_sig_block_t;
 typedef struct ets_secure_boot_signature ets_secure_boot_signature_t;
@@ -83,6 +73,8 @@ ets_secure_boot_status_t ets_secure_boot_verify_signature(const ets_secure_boot_
  */
 void ets_secure_boot_revoke_public_key_digest(int index);
 
+#define CRC_SIGN_BLOCK_LEN 1196
+#define SIG_BLOCK_PADDING 4096
 #define ETS_SECURE_BOOT_V2_SIGNATURE_MAGIC 0xE7
 
 /* Secure Boot V2 signature block
@@ -101,7 +93,7 @@ struct ets_secure_boot_sig_block {
     uint8_t _padding[16];
 };
 
-_Static_assert(sizeof(ets_secure_boot_sig_block_t) == 1216, "invalid sig block size");
+ESP_STATIC_ASSERT(sizeof(ets_secure_boot_sig_block_t) == 1216, "invalid sig block size");
 
 #define SECURE_BOOT_NUM_BLOCKS 3
 
@@ -111,7 +103,7 @@ struct ets_secure_boot_signature {
     uint8_t _padding[4096 - (sizeof(ets_secure_boot_sig_block_t) * SECURE_BOOT_NUM_BLOCKS)];
 };
 
-_Static_assert(sizeof(ets_secure_boot_signature_t) == 4096, "invalid sig sector size");
+ESP_STATIC_ASSERT(sizeof(ets_secure_boot_signature_t) == 4096, "invalid sig sector size");
 
 #define MAX_KEY_DIGESTS 3
 
@@ -123,5 +115,3 @@ struct ets_secure_boot_key_digests {
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* _ROM_SECURE_BOOT_H_ */

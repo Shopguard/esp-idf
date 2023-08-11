@@ -900,6 +900,27 @@ BOOLEAN gatt_is_bda_connected(BD_ADDR bda)
     }
     return connected;
 }
+
+/*******************************************************************************
+**
+** Function         gatt_check_connection_state_by_tcb
+**
+** Description
+**
+** Returns           TRUE if connected. Otherwise connection not established.
+**
+*******************************************************************************/
+BOOLEAN gatt_check_connection_state_by_tcb(tGATT_TCB *p_tcb)
+{
+    BOOLEAN connected = FALSE;
+
+    if(p_tcb && gatt_get_ch_state(p_tcb) == GATT_CH_OPEN) {
+        connected = TRUE;
+    }
+
+    return connected;
+}
+
 /*******************************************************************************
 **
 ** Function         gatt_find_i_tcb_by_addr
@@ -1399,7 +1420,7 @@ UINT8 gatt_sr_find_i_rcb_by_handle(UINT16 handle)
 **
 ** Description      The function searches for a service that owns a specific handle.
 **
-** Returns          0 if not found. Otherwise index of th eservice.
+** Returns          GATT_MAX_SR_PROFILES if not found. Otherwise index of th eservice.
 **
 *******************************************************************************/
 #if (GATTS_INCLUDED == TRUE)

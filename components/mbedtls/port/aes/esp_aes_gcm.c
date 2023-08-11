@@ -40,6 +40,7 @@
 #include "esp_heap_caps.h"
 #include "soc/soc_memory_layout.h"
 
+#include "mbedtls/error.h"
 #include <string.h>
 
 #define ESP_PUT_BE64(a, val)                                    \
@@ -108,12 +109,9 @@ static void increment32_j0(esp_gcm_context *ctx, uint8_t *j)
 /* Function to xor two data blocks */
 static void xor_data(uint8_t *d, const uint8_t *s)
 {
-    uint32_t *dst = (uint32_t *) d;
-    uint32_t *src = (uint32_t *) s;
-    *dst++ ^= *src++;
-    *dst++ ^= *src++;
-    *dst++ ^= *src++;
-    *dst++ ^= *src++;
+    for (int i = 0; i < AES_BLOCK_BYTES; i++) {
+        d[i] ^= s[i];
+    }
 }
 
 
@@ -260,6 +258,11 @@ int esp_aes_gcm_setkey( esp_gcm_context *ctx,
                         const unsigned char *key,
                         unsigned int keybits )
 {
+#if !SOC_AES_SUPPORT_AES_192
+    if (keybits == 192) {
+        return MBEDTLS_ERR_PLATFORM_FEATURE_UNSUPPORTED;
+    }
+#endif
     if (keybits != 128 && keybits != 192 && keybits != 256) {
         return MBEDTLS_ERR_AES_INVALID_KEY_LENGTH;
     }
@@ -474,6 +477,7 @@ int esp_aes_gcm_finish( esp_gcm_context *ctx,
 {
     size_t nc_off = 0;
     uint8_t len_block[AES_BLOCK_BYTES] = {0};
+    uint8_t stream[AES_BLOCK_BYTES] = {0};
 
     if ( tag_len > 16 || tag_len < 4 ) {
         return ( MBEDTLS_ERR_GCM_BAD_INPUT );
@@ -485,7 +489,7 @@ int esp_aes_gcm_finish( esp_gcm_context *ctx,
     esp_gcm_ghash(ctx, len_block, AES_BLOCK_BYTES, ctx->ghash);
 
     /* Tag T = GCTR(J0, ) where T is truncated to tag_len */
-    esp_aes_crypt_ctr(&ctx->aes_ctx, tag_len, &nc_off, ctx->ori_j0, 0, ctx->ghash, tag);
+    esp_aes_crypt_ctr(&ctx->aes_ctx, tag_len, &nc_off, ctx->ori_j0, stream, ctx->ghash, tag);
 
     return 0;
 }
@@ -493,7 +497,7 @@ int esp_aes_gcm_finish( esp_gcm_context *ctx,
 /* Due to restrictions in the hardware (e.g. need to do the whole conversion in one go),
    some combinations of inputs are not supported */
 static bool esp_aes_gcm_input_support_hw_accel(size_t length, const unsigned char *aad, size_t aad_len,
-                                               const unsigned char *input, unsigned char *output)
+                                               const unsigned char *input, unsigned char *output, uint8_t *stream_in)
 {
     bool support_hw_accel = true;
 
@@ -508,9 +512,14 @@ static bool esp_aes_gcm_input_support_hw_accel(size_t length, const unsigned cha
     } else if (!esp_ptr_dma_capable(output) && length > 0) {
         /* output in non internal DMA memory */
         support_hw_accel = false;
+    } else if (!esp_ptr_dma_capable(stream_in)) {
+        /* Stream in (and therefor other descriptors and buffers that come from the stack)
+           in non internal DMA memory */
+        support_hw_accel = false;
     } else if (length == 0) {
         support_hw_accel = false;
     }
+
 
     return support_hw_accel;
 }
@@ -565,7 +574,7 @@ int esp_aes_gcm_crypt_and_tag( esp_gcm_context *ctx,
     unsigned block_bytes = aad_len - stream_bytes;     // bytes which are in a full block
 
     /* Due to hardware limition only certain cases are fully supported in HW */
-    if (!esp_aes_gcm_input_support_hw_accel(length, aad, aad_len, input, output)) {
+    if (!esp_aes_gcm_input_support_hw_accel(length, aad, aad_len, input, output, stream_in)) {
         return esp_aes_gcm_crypt_and_tag_partial_hw(ctx, mode, length, iv, iv_len, aad, aad_len, input, output, tag_len, tag);
     }
 

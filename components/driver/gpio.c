@@ -1,16 +1,8 @@
-// Copyright 2015-2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <esp_types.h>
 #include "esp_err.h"
@@ -26,15 +18,12 @@
 #include "soc/soc_caps.h"
 #include "soc/gpio_periph.h"
 #include "esp_log.h"
+#include "esp_check.h"
 #include "hal/gpio_hal.h"
 #include "esp_rom_gpio.h"
 
 static const char *GPIO_TAG = "gpio";
-#define GPIO_CHECK(a, str, ret_val) \
-    if (!(a)) { \
-        ESP_LOGE(GPIO_TAG,"%s(%d): %s", __FUNCTION__, __LINE__, str); \
-        return (ret_val); \
-    }
+#define GPIO_CHECK(a, str, ret_val) ESP_RETURN_ON_FALSE(a, ret_val, GPIO_TAG, "%s", str)
 
 #define GPIO_ISR_CORE_ID_UNINIT    (3)
 
@@ -392,7 +381,7 @@ esp_err_t gpio_config(const gpio_config_t *pGPIOConfig)
             }
 
             /* By default, all the pins have to be configured as GPIO pins. */
-            PIN_FUNC_SELECT(io_reg, PIN_FUNC_GPIO);
+            gpio_hal_iomux_func_sel(io_reg, PIN_FUNC_GPIO);
         }
 
         io_num++;
@@ -502,15 +491,21 @@ esp_err_t gpio_isr_handler_remove(gpio_num_t gpio_num)
 
 void gpio_uninstall_isr_service(void)
 {
+    gpio_isr_func_t *gpio_isr_func_free = NULL;
+    gpio_isr_handle_t gpio_isr_handle_free = NULL;
+    portENTER_CRITICAL(&gpio_context.gpio_spinlock);
     if (gpio_context.gpio_isr_func == NULL) {
+        portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
         return;
     }
-    portENTER_CRITICAL(&gpio_context.gpio_spinlock);
-    esp_intr_free(gpio_context.gpio_isr_handle);
-    free(gpio_context.gpio_isr_func);
+    gpio_isr_func_free = gpio_context.gpio_isr_func;
     gpio_context.gpio_isr_func = NULL;
+    gpio_isr_handle_free = gpio_context.gpio_isr_handle;
+    gpio_context.gpio_isr_handle = NULL;
     gpio_context.isr_core_id = GPIO_ISR_CORE_ID_UNINIT;
     portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
+    esp_intr_free(gpio_isr_handle_free);
+    free(gpio_isr_func_free);
     return;
 }
 
@@ -543,7 +538,12 @@ esp_err_t gpio_isr_register(void (*fn)(void *), void *arg, int intr_alloc_flags,
 #else /* CONFIG_FREERTOS_UNICORE */
     ret = esp_ipc_call_blocking(gpio_context.isr_core_id, gpio_isr_register_on_core_static, (void *)&p);
 #endif /* !CONFIG_FREERTOS_UNICORE */
-    if(ret != ESP_OK || p.ret != ESP_OK) {
+    if (ret != ESP_OK) {
+        ESP_LOGE(GPIO_TAG, "esp_ipc_call_blocking failed (0x%x)", ret);
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (p.ret != ESP_OK) {
+        ESP_LOGE(GPIO_TAG, "esp_intr_alloc failed (0x%x)", p.ret);
         return ESP_ERR_NOT_FOUND;
     }
     return ESP_OK;
@@ -562,6 +562,9 @@ esp_err_t gpio_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t intr_type)
 #endif
         portENTER_CRITICAL(&gpio_context.gpio_spinlock);
         gpio_hal_wakeup_enable(gpio_context.gpio_hal, gpio_num, intr_type);
+#if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
+        gpio_hal_sleep_sel_dis(gpio_context.gpio_hal, gpio_num);
+#endif
         portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
     } else {
         ESP_LOGE(GPIO_TAG, "GPIO wakeup only supports level mode, but edge mode set. gpio_num:%u", gpio_num);
@@ -582,6 +585,9 @@ esp_err_t gpio_wakeup_disable(gpio_num_t gpio_num)
 #endif
     portENTER_CRITICAL(&gpio_context.gpio_spinlock);
     gpio_hal_wakeup_disable(gpio_context.gpio_hal, gpio_num);
+#if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
+    gpio_hal_sleep_sel_en(gpio_context.gpio_hal, gpio_num);
+#endif
     portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
     return ret;
 }
@@ -717,7 +723,6 @@ void gpio_iomux_out(uint8_t gpio_num, int func, bool oen_inv)
     gpio_hal_iomux_out(gpio_context.gpio_hal, gpio_num, func, (uint32_t)oen_inv);
 }
 
-#if SOC_GPIO_SUPPORT_SLP_SWITCH
 static esp_err_t gpio_sleep_pullup_en(gpio_num_t gpio_num)
 {
     GPIO_CHECK(GPIO_IS_VALID_GPIO(gpio_num), "GPIO number error", ESP_ERR_INVALID_ARG);
@@ -889,7 +894,6 @@ esp_err_t gpio_sleep_pupd_config_unapply(gpio_num_t gpio_num)
     return ESP_OK;
 }
 #endif // CONFIG_GPIO_ESP32_SUPPORT_SWITCH_SLP_PULL
-#endif // SOC_GPIO_SUPPORT_SLP_SWITCH
 
 #if SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP
 esp_err_t gpio_deep_sleep_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t intr_type)
@@ -904,6 +908,9 @@ esp_err_t gpio_deep_sleep_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t int
     }
     portENTER_CRITICAL(&gpio_context.gpio_spinlock);
     gpio_hal_deepsleep_wakeup_enable(gpio_context.gpio_hal, gpio_num, intr_type);
+#if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
+    gpio_hal_sleep_sel_dis(gpio_context.gpio_hal, gpio_num);
+#endif
     portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
     return ESP_OK;
 }
@@ -916,6 +923,9 @@ esp_err_t gpio_deep_sleep_wakeup_disable(gpio_num_t gpio_num)
     }
     portENTER_CRITICAL(&gpio_context.gpio_spinlock);
     gpio_hal_deepsleep_wakeup_disable(gpio_context.gpio_hal, gpio_num);
+#if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
+    gpio_hal_sleep_sel_en(gpio_context.gpio_hal, gpio_num);
+#endif
     portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
     return ESP_OK;
 }

@@ -289,9 +289,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     rsil    a3, \level - 1                  /* lower interrupt level by 1 */
     #endif
 
+    #ifdef XT_RTOS_TIMER_INT
     movi    a3, XT_TIMER_INTEN              /* a3 = timer interrupt bit */
     wsr     a4, INTCLEAR                    /* clear sw or edge-triggered interrupt */
     beq     a3, a4, 7f                      /* if timer interrupt then skip table */
+    #else
+    wsr     a4, INTCLEAR                    /* clear sw or edge-triggered interrupt */
+    #endif // XT_RTOS_TIMER_INT
 
     find_ms_setbit a3, a4, a3, 0            /* a3 = interrupt number */
 
@@ -316,6 +320,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     j       .L_xt_user_int_&level&          /* check for more interrupts */
     #endif
 
+    #ifdef XT_RTOS_TIMER_INT
 7:
 
     .ifeq XT_TIMER_INTPRI - \level
@@ -335,6 +340,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     call4   XT_RTOS_TIMER_INT
     #endif
     .endif
+    #endif // XT_RTOS_TIMER_INT
 
     #ifdef XT_USE_SWPRI
     j       8f
@@ -633,11 +639,11 @@ _xt_user_exc:
     rsr     a0, EXCSAVE_1                   /* save interruptee's a0 */
     s32i    a0, sp, XT_STK_A0
 
-    /* Set up PS for C, reenable hi-pri interrupts, and clear EXCM. */
+    /* Set up PS for C, reenable debug and NMI interrupts, and clear EXCM. */
     #ifdef __XTENSA_CALL0_ABI__
-    movi    a0, PS_INTLEVEL(XCHAL_EXCM_LEVEL) | PS_UM
+    movi    a0, PS_INTLEVEL(XCHAL_DEBUGLEVEL - 2) | PS_UM
     #else
-    movi    a0, PS_INTLEVEL(XCHAL_EXCM_LEVEL) | PS_UM | PS_WOE
+    movi    a0, PS_INTLEVEL(XCHAL_DEBUGLEVEL - 2) | PS_UM | PS_WOE
     #endif
     wsr     a0, PS
 
@@ -897,34 +903,32 @@ _xt_coproc_exc:
     /* Get co-processor state save area of new owner thread. */
     call0   XT_RTOS_CP_STATE                /* a15 = new owner's save area */
 
-    #ifndef CONFIG_FREERTOS_FPU_IN_ISR
-    beqz    a15, .L_goto_invalid
+    #if CONFIG_FREERTOS_FPU_IN_ISR
+    beqz    a15, .L_skip_core_pin           /* CP used in ISR, skip task pinning */
+    #else
+    beqz    a15, .L_goto_invalid            /* not in a thread (invalid) */
     #endif
 
-    /*When FPU in ISR is enabled we could deal with zeroed a15 */
+#if configNUM_CORES > 1
+    /* CP operations are incompatible with unpinned tasks. Thus we pin the task
+    to the current running core. */
+    movi    a2, pxCurrentTCB
+    getcoreid a3                            /* a3 = current core ID */
+    addx4   a2, a3, a2
+    l32i    a2, a2, 0                       /* a2 = start of pxCurrentTCB[cpuid] */
+    addi    a2, a2, TASKTCB_XCOREID_OFFSET  /* a2 = &TCB.xCoreID */
+    s32i    a3, a2, 0                       /* TCB.xCoreID = current core ID */
+#endif // configNUM_CORES > 1
+
+#if CONFIG_FREERTOS_FPU_IN_ISR
+.L_skip_core_pin:
+#endif
 
     /* Enable the co-processor's bit in CPENABLE. */
     movi    a0, _xt_coproc_mask
     rsr     a4, CPENABLE                    /* a4 = CPENABLE */
     addx4   a0, a5, a0                      /* a0 = &_xt_coproc_mask[n] */
     l32i    a0, a0, 0                       /* a0 = (n << 16) | (1 << n) */
-
-    /* FPU operations are incompatible with non-pinned tasks. If we have a FPU operation
-       here, to keep the entire thing from crashing, it's better to pin the task to whatever
-       core we're running on now. */
-    movi    a2, pxCurrentTCB
-    getcoreid a3
-    addx4     a2,  a3, a2
-    l32i    a2, a2, 0                       /* a2 = start of pxCurrentTCB[cpuid] */
-    addi    a2, a2, TASKTCB_XCOREID_OFFSET  /* offset to xCoreID in tcb struct */
-    s32i    a3, a2, 0                       /* store current cpuid */
-
-    /* Grab correct xt_coproc_owner_sa for this core */
-    movi    a2, XCHAL_CP_MAX << 2
-    mull    a2, a2, a3                      /* multiply by current processor id */
-    movi    a3, _xt_coproc_owner_sa         /* a3 = base of owner array */
-    add     a3, a3, a2                      /* a3 = owner area needed for this processor */
-
     extui   a2, a0, 0, 16                   /* coprocessor bitmask portion */
     or      a4, a4, a2                      /* a4 = CPENABLE | (1 << n) */
     wsr     a4, CPENABLE
@@ -935,6 +939,11 @@ everywhere): _xt_coproc_release assumes it works like this in order not to need
 locking.
 */
 
+    /* Grab correct xt_coproc_owner_sa for this core */
+    movi    a2, XCHAL_CP_MAX << 2
+    mull    a2, a2, a3                      /* multiply by current processor id */
+    movi    a3, _xt_coproc_owner_sa         /* a3 = base of owner array */
+    add     a3, a3, a2                      /* a3 = owner area needed for this processor */
 
     /* Get old coprocessor owner thread (save area ptr) and assign new one.  */
     addx4   a3,  a5, a3                      /* a3 = &_xt_coproc_owner_sa[n] */

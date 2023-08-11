@@ -73,6 +73,7 @@ static struct {
     struct arg_int *data_size;
     struct arg_int *count;
     struct arg_int *tos;
+    struct arg_int *ttl;
     struct arg_str *host;
     struct arg_end *end;
 } ping_args;
@@ -105,6 +106,10 @@ static int do_ping_cmd(int argc, char **argv)
 
     if (ping_args.tos->count > 0) {
         config.tos = (uint32_t)(ping_args.tos->ival[0]);
+    }
+
+    if (ping_args.ttl->count > 0) {
+        config.ttl = (uint32_t)(ping_args.ttl->ival[0]);
     }
 
     // parse IP address
@@ -156,6 +161,7 @@ static void register_ping(void)
     ping_args.data_size = arg_int0("s", "size", "<n>", "Specify the number of data bytes to be sent");
     ping_args.count = arg_int0("c", "count", "<n>", "Stop after sending count packets");
     ping_args.tos = arg_int0("Q", "tos", "<n>", "Set Type of Service related bits in IP datagrams");
+    ping_args.ttl = arg_int0("T", "ttl", "<n>", "Set Time to Live related bits in IP datagrams");
     ping_args.host = arg_str1(NULL, NULL, "<host>", "Host address");
     ping_args.end = arg_end(1);
     const esp_console_cmd_t ping_cmd = {
@@ -204,6 +210,9 @@ void app_main(void)
 #elif CONFIG_ESP_CONSOLE_USB_CDC
     esp_console_dev_usb_cdc_config_t cdc_config = ESP_CONSOLE_DEV_CDC_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_console_new_repl_usb_cdc(&cdc_config, &repl_config, &s_repl));
+#elif CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    esp_console_dev_usb_serial_jtag_config_t usbjtag_config = ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_console_new_repl_usb_serial_jtag(&usbjtag_config, &repl_config, &repl));
 #endif
 
     /* register command `ping` */

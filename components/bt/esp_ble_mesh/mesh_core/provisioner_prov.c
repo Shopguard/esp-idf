@@ -1,16 +1,8 @@
-// Copyright 2017-2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <string.h>
 #include <errno.h>
@@ -82,6 +74,7 @@ _Static_assert(BLE_MESH_MAX_CONN >= CONFIG_BLE_MESH_PBG_SAME_TIME,
 
 #define START_PAYLOAD_MAX      20
 #define CONT_PAYLOAD_MAX       23
+#define START_LAST_SEG_MAX     2
 
 #define START_LAST_SEG(gpc)    (gpc >> 2)
 #define CONT_SEG_INDEX(gpc)    (gpc >> 2)
@@ -156,6 +149,7 @@ struct prov_link {
 
     uint8_t *rand;              /* Local Random */
     uint8_t *conf;              /* Remote Confirmation */
+    uint8_t *local_conf;        /* Local Confirmation */
 
     uint8_t *prov_salt;         /* Provisioning Salt */
 
@@ -1253,6 +1247,7 @@ static void prov_memory_free(const uint8_t idx)
     PROV_FREE_MEM(idx, auth);
     PROV_FREE_MEM(idx, rand);
     PROV_FREE_MEM(idx, conf);
+    PROV_FREE_MEM(idx, local_conf);
     PROV_FREE_MEM(idx, conf_salt);
     PROV_FREE_MEM(idx, conf_key);
     PROV_FREE_MEM(idx, conf_inputs);
@@ -1323,8 +1318,8 @@ static void reset_link(const uint8_t idx, uint8_t reason)
 
 #if defined(CONFIG_BLE_MESH_USE_DUPLICATE_SCAN)
     /* Remove the link id from exceptional list */
-    bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_REMOVE,
-                                    BLE_MESH_EXCEP_INFO_MESH_LINK_ID, &link[idx].link_id);
+    bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_SUB_CODE_REMOVE,
+                                    BLE_MESH_EXCEP_LIST_TYPE_MESH_LINK_ID, &link[idx].link_id);
 #endif
 
     /* Clear everything except the retransmit delayed work config */
@@ -1483,8 +1478,8 @@ static void send_link_open(const uint8_t idx)
 
 #if defined(CONFIG_BLE_MESH_USE_DUPLICATE_SCAN)
     /* Add the link id into exceptional list */
-    bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_ADD,
-                                    BLE_MESH_EXCEP_INFO_MESH_LINK_ID, &link[idx].link_id);
+    bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_SUB_CODE_ADD,
+                                    BLE_MESH_EXCEP_LIST_TYPE_MESH_LINK_ID, &link[idx].link_id);
 #endif
 
     bearer_ctl_send(idx, LINK_OPEN, link[idx].uuid, 16);
@@ -1928,6 +1923,19 @@ static int prov_auth(const uint8_t idx, uint8_t method, uint8_t action, uint8_t 
         /* Provisioner ouput number/string and wait for device's Provisioning Input Complete PDU */
         link[idx].expect = PROV_INPUT_COMPLETE;
 
+        /* NOTE: The Bluetooth SIG recommends that mesh implementations enforce a randomly
+         * selected AuthValue using all of the available bits, where permitted by the
+         * implementation. A large entropy helps ensure that a brute-force of the AuthValue,
+         * even a static AuthValue, cannot normally be completed in a reasonable time (CVE-2020-26557).
+         *
+         * AuthValues selected using a cryptographically secure random or pseudorandom number
+         * generator and having the maximum permitted entropy (128-bits) will be most difficult
+         * to brute-force. AuthValues with reduced entropy or generated in a predictable manner
+         * will not grant the same level of protection against this vulnerability. Selecting a
+         * new AuthValue with each provisioning attempt can also make it more difficult to launch
+         * a brute-force attack by requiring the attacker to restart the search with each
+         * provisioning attempt (CVE-2020-26556).
+         */
         if (input == BLE_MESH_ENTER_STRING) {
             unsigned char str[9] = {'\0'};
             uint8_t j = 0U;
@@ -1954,7 +1962,17 @@ static int prov_auth(const uint8_t idx, uint8_t method, uint8_t action, uint8_t 
             uint32_t num = 0U;
 
             bt_mesh_rand(&num, sizeof(num));
-            num %= div[size - 1];
+
+            if (input == BLE_MESH_PUSH ||
+                input == BLE_MESH_TWIST) {
+                /** NOTE: According to the Bluetooth Mesh Profile Specification
+                 *  Section 5.4.2.4, push and twist should be a random integer
+                 *  between 0 and 10^size.
+                 */
+                num = (num % (div[size - 1] - 1)) + 1;
+            } else {
+                num %= div[size - 1];
+            }
 
             sys_put_be32(num, &link[idx].auth[12]);
             memset(link[idx].auth, 0, 12);
@@ -1970,6 +1988,7 @@ static int prov_auth(const uint8_t idx, uint8_t method, uint8_t action, uint8_t 
 static void send_confirm(const uint8_t idx)
 {
     PROV_BUF(buf, 17);
+    uint8_t *conf = NULL;
 
     BT_DBG("ConfInputs[0]   %s", bt_hex(link[idx].conf_inputs, 64));
     BT_DBG("ConfInputs[64]  %s", bt_hex(link[idx].conf_inputs + 64, 64));
@@ -2016,11 +2035,21 @@ static void send_confirm(const uint8_t idx)
 
     prov_buf_init(&buf, PROV_CONFIRM);
 
-    if (bt_mesh_prov_conf(link[idx].conf_key, link[idx].rand, link[idx].auth,
-                          net_buf_simple_add(&buf, 16))) {
+    conf = net_buf_simple_add(&buf, 16);
+
+    if (bt_mesh_prov_conf(link[idx].conf_key, link[idx].rand,
+                          link[idx].auth, conf)) {
         BT_ERR("Failed to generate confirmation value");
         goto fail;
     }
+
+    link[idx].local_conf = bt_mesh_calloc(PROV_CONFIRM_SIZE);
+    if (!link[idx].local_conf) {
+        BT_ERR("%s, Out of memory", __func__);
+        goto fail;
+    }
+
+    memcpy(link[idx].local_conf, conf, PROV_CONFIRM_SIZE);
 
     if (prov_send(idx, &buf)) {
         BT_ERR("Failed to send Provisioning Confirm");
@@ -2057,7 +2086,7 @@ int bt_mesh_provisioner_set_oob_input_data(const uint8_t idx, const uint8_t *val
     memset(link[idx].auth, 0, 16);
     if (num_flag) {
         /* Provisioner inputs number */
-        memcpy(link[idx].auth + 12, val, sizeof(uint32_t));
+        sys_memcpy_swap(link[idx].auth + 12, val, sizeof(uint32_t));
     } else {
         /* Provisioner inputs string */
         memcpy(link[idx].auth, val, link[idx].auth_size);
@@ -2094,7 +2123,7 @@ int bt_mesh_provisioner_set_oob_output_data(const uint8_t idx, const uint8_t *nu
     if (num_flag) {
         /* Provisioner output number */
         memset(link[idx].auth, 0, 16);
-        memcpy(link[idx].auth + 16 - size, num, size);
+        sys_memcpy_swap(link[idx].auth + 16 - size, num, size);
     } else {
         /* Provisioner output string */
         memset(link[idx].auth, 0, 16);
@@ -2288,6 +2317,17 @@ static void prov_confirm(const uint8_t idx, const uint8_t *data)
     PROV_BUF(buf, 17);
 
     BT_DBG("Remote Confirm: %s", bt_hex(data, 16));
+
+    /* NOTE: The Bluetooth SIG recommends that potentially vulnerable mesh provisioners
+     * restrict the authentication procedure and not accept provisioning random and
+     * provisioning confirmation numbers from a remote peer that are the same as those
+     * selected by the local device (CVE-2020-26560).
+     */
+    if (!memcmp(data, link[idx].local_conf, 16)) {
+        BT_ERR("Confirmation value is identical to ours, rejecting.");
+        close_link(idx, CLOSE_REASON_FAILED);
+        return;
+    }
 
     /* Make sure received pdu is ok and cancel the timeout timer */
     if (bt_mesh_atomic_test_and_clear_bit(link[idx].flags, TIMEOUT_START)) {
@@ -2498,6 +2538,16 @@ static void prov_random(const uint8_t idx, const uint8_t *data)
     uint8_t conf_verify[16] = {0};
 
     BT_DBG("Remote Random: %s", bt_hex(data, 16));
+
+    /* NOTE: The Bluetooth SIG recommends that potentially vulnerable mesh provisioners
+     * restrict the authentication procedure and not accept provisioning random and
+     * provisioning confirmation numbers from a remote peer that are the same as those
+     * selected by the local device (CVE-2020-26560).
+     */
+    if (!memcmp(data, link[idx].rand, 16)) {
+        BT_ERR("Random value is identical to ours, rejecting.");
+        goto fail;
+    }
 
     if (bt_mesh_prov_conf(link[idx].conf_key, data, link[idx].auth, conf_verify)) {
         BT_ERR("Failed to calculate confirmation verification");
@@ -2893,6 +2943,12 @@ static void gen_prov_ack(const uint8_t idx, struct prov_rx *rx, struct net_buf_s
         case PROV_START:
             pub_key_oob = link[idx].conf_inputs[13];
             send_pub_key(idx, pub_key_oob);
+            /* For case MESH/PVNR/PROV/BV-04-C, if using OOB public key,
+             * the value of expect_ack_for shall be PROV_PUB_KEY.
+             */
+            if (pub_key_oob) {
+                return;
+            }
             break;
         case PROV_PUB_KEY:
             prov_gen_dh_key(idx);
@@ -2927,6 +2983,12 @@ static void gen_prov_start(const uint8_t idx, struct prov_rx *rx, struct net_buf
     /* Provisioner can not receive zero-length provisioning pdu */
     if (link[idx].rx.buf->len < 1) {
         BT_ERR("Ignoring zero-length provisioning PDU");
+        close_link(idx, CLOSE_REASON_FAILED);
+        return;
+    }
+
+    if (START_LAST_SEG(rx->gpc) > START_LAST_SEG_MAX) {
+        BT_ERR("Invalid SegN 0x%02x", START_LAST_SEG(rx->gpc));
         close_link(idx, CLOSE_REASON_FAILED);
         return;
     }
@@ -3276,8 +3338,8 @@ int bt_mesh_provisioner_prov_reset(bool erase)
 #if CONFIG_BLE_MESH_PB_ADV
             prov_clear_tx(i);
 #if CONFIG_BLE_MESH_USE_DUPLICATE_SCAN
-            bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_REMOVE,
-                BLE_MESH_EXCEP_INFO_MESH_LINK_ID, &link[i].link_id);
+            bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_SUB_CODE_REMOVE,
+                BLE_MESH_EXCEP_LIST_TYPE_MESH_LINK_ID, &link[i].link_id);
 #endif
             memset(&link[i], 0, offsetof(struct prov_link, tx.retransmit));
             link[i].pending_ack = XACT_NVAL;

@@ -158,6 +158,11 @@ UINT8           active_remote_addr_type;         /* local device address type fo
 BD_FEATURES     peer_le_features;       /* Peer LE Used features mask for the device */
 tBTM_SET_PKT_DATA_LENGTH_CBACK *p_set_pkt_data_cback;
 tBTM_LE_SET_PKT_DATA_LENGTH_PARAMS data_length_params;
+BOOLEAN   data_len_updating;
+// data len update cmd cache
+BOOLEAN   data_len_waiting;
+tBTM_SET_PKT_DATA_LENGTH_CBACK *p_set_data_len_cback_waiting;
+UINT16 tx_len_waiting;
 #endif
 tBTM_PM_MCB     *p_pm_mode_db;          /* Pointer to PM mode control block per ACL link */
 
@@ -829,6 +834,8 @@ typedef struct {
     UINT16      btm_def_link_policy;
     UINT16      btm_def_link_super_tout;
 
+    tBTM_ACL_LINK_STAT_CB *p_acl_link_stat_cb; /* Callback for when ACL link related events came */
+
     tBTM_BL_EVENT_MASK     bl_evt_mask;
     tBTM_BL_CHANGE_CB     *p_bl_changed_cb;    /* Callback for when Busy Level changed */
 
@@ -956,12 +963,10 @@ extern tBTM_CallbackFunc conn_param_update_cb;
 
 typedef UINT8 tBTM_SEC_ACTION;
 
-/*
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-*/
 
 #if BTM_DYNAMIC_MEMORY == FALSE
 extern tBTM_CB  btm_cb;
@@ -1025,6 +1030,7 @@ void         btm_acl_created (BD_ADDR bda, DEV_CLASS dc, BD_NAME bdn,
 void         btm_acl_removed (BD_ADDR bda, tBT_TRANSPORT transport);
 void         btm_acl_device_down (void);
 void         btm_acl_update_busy_level (tBTM_BLI_EVENT event);
+void         btm_acl_link_stat_report(tBTM_ACL_LINK_STAT_EVENT_DATA *p_data);
 
 void         btm_cont_rswitch (tACL_CONN *p,
                                tBTM_SEC_DEV_REC *p_dev_rec,

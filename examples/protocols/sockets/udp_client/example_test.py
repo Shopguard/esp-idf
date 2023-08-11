@@ -17,6 +17,7 @@ from threading import Event, Thread
 
 import netifaces
 import ttfw_idf
+from tiny_test_fw.DUT import ExpectTimeout
 
 # -----------  Config  ----------
 PORT = 3333
@@ -78,7 +79,7 @@ class UdpServer:
                 break
 
 
-@ttfw_idf.idf_example_test(env_tag='Example_WIFI')
+@ttfw_idf.idf_example_test(env_tag='Example_WIFI_Protocols')
 def test_examples_protocol_socket_udpclient(env, extra_data):
     """
     steps:
@@ -104,14 +105,28 @@ def test_examples_protocol_socket_udpclient(env, extra_data):
     with UdpServer(PORT, socket.AF_INET):
         server_ip = get_my_ip(netifaces.AF_INET)
         print('Connect udp client to server IP={}'.format(server_ip))
-        dut1.write(server_ip)
-        dut1.expect(re.compile(r'OK: Message from ESP32'))
+        for _ in range(3):
+            try:
+                dut1.write(server_ip)
+                dut1.expect(re.compile(r'OK: Message from ESP32'))
+                break
+            except ExpectTimeout:
+                pass
+        else:
+            raise ValueError('Failed to send/recv udp packets.')
     # test IPv6
     with UdpServer(PORT, socket.AF_INET6):
         server_ip = get_my_ip(netifaces.AF_INET6)
         print('Connect udp client to server IP={}'.format(server_ip))
-        dut1.write(server_ip)
-        dut1.expect(re.compile(r'OK: Message from ESP32'))
+        for _ in range(3):
+            try:
+                dut1.write(server_ip)
+                dut1.expect(re.compile(r'OK: Message from ESP32'))
+                break
+            except ExpectTimeout:
+                pass
+        else:
+            raise ValueError('Failed to send/recv udp packets.')
 
 
 if __name__ == '__main__':

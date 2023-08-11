@@ -1,16 +1,8 @@
-// Copyright 2015-2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include "soc/spi_periph.h"
 #include "stddef.h"
@@ -50,11 +42,19 @@ const spi_signal_conn_t spi_periph_signal[SOC_SPI_PERIPH_NUM] = {
         .spiq_out = FSPIQ_OUT_IDX,
         .spiwp_out = FSPIWP_OUT_IDX,
         .spihd_out = FSPIHD_OUT_IDX,
+        .spid4_out = FSPIIO4_OUT_IDX,
+        .spid5_out = FSPIIO5_OUT_IDX,
+        .spid6_out = FSPIIO6_OUT_IDX,
+        .spid7_out = FSPIIO7_OUT_IDX,
         .spid_in = FSPID_IN_IDX,
         .spiq_in = FSPIQ_IN_IDX,
         .spiwp_in = FSPIWP_IN_IDX,
         .spihd_in = FSPIHD_IN_IDX,
-        .spics_out = {FSPICS0_OUT_IDX, FSPICS1_OUT_IDX, FSPICS2_OUT_IDX},
+        .spid4_in = FSPIIO4_IN_IDX,
+        .spid5_in = FSPIIO5_IN_IDX,
+        .spid6_in = FSPIIO6_IN_IDX,
+        .spid7_in = FSPIIO7_IN_IDX,
+        .spics_out = {FSPICS0_OUT_IDX, FSPICS1_OUT_IDX, FSPICS2_OUT_IDX, FSPICS3_OUT_IDX, FSPICS4_OUT_IDX, FSPICS5_OUT_IDX},
         .spics_in = FSPICS0_IN_IDX,
         .spiclk_iomux_pin = FSPI_IOMUX_PIN_NUM_CLK,
         .spid_iomux_pin = FSPI_IOMUX_PIN_NUM_MOSI,

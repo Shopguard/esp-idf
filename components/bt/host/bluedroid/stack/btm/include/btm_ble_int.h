@@ -28,6 +28,8 @@
 
 #include "common/bt_target.h"
 #include "osi/fixed_queue.h"
+#include "osi/pkt_queue.h"
+#include "osi/thread.h"
 #include "stack/hcidefs.h"
 #include "stack/btm_ble_api.h"
 #include "btm_int.h"
@@ -341,6 +343,9 @@ typedef struct {
     tBTM_CMPL_CB *p_scan_cmpl_cb;
     TIMER_LIST_ENT scan_timer_ent;
 
+    struct pkt_queue *adv_rpt_queue;
+    struct osi_event *adv_rpt_ready;
+
     /* background connection procedure cb value */
     tBTM_BLE_CONN_TYPE bg_conn_type;
     UINT32 scan_int;
@@ -384,6 +389,9 @@ extern "C" {
 void btm_ble_timeout(TIMER_LIST_ENT *p_tle);
 void btm_ble_process_adv_pkt (UINT8 *p);
 void btm_ble_process_adv_discard_evt(UINT8 *p);
+void btm_ble_process_direct_adv_pkt (UINT8 *p);
+bool btm_ble_adv_pkt_ready(void);
+bool btm_ble_adv_pkt_post(pkt_linked_item_t *pkt);
 void btm_ble_proc_scan_rsp_rpt (UINT8 *p);
 tBTM_STATUS btm_ble_read_remote_name(BD_ADDR remote_bda, tBTM_INQ_INFO *p_cur, tBTM_CMPL_CB *p_cb);
 BOOLEAN btm_ble_cancel_remote_name(BD_ADDR remote_bda);
@@ -394,9 +402,7 @@ tBTM_STATUS btm_ble_start_inquiry (UINT8 mode, UINT8   duration);
 void btm_ble_stop_scan(void);
 void btm_clear_all_pending_le_entry(void);
 
-BOOLEAN btm_ble_send_extended_scan_params(UINT8 scan_type, UINT32 scan_int,
-        UINT32 scan_win, UINT8 addr_type_own,
-        UINT8 scan_filter_policy);
+BOOLEAN btm_ble_send_extended_scan_params(UINT8 scan_type, UINT32 scan_int, UINT32 scan_win, UINT8 addr_type_own, UINT8 scan_filter_policy);
 void btm_ble_stop_inquiry(void);
 void btm_ble_init (void);
 void btm_ble_free (void);
@@ -407,12 +413,13 @@ void btm_ble_conn_complete(UINT8 *p, UINT16 evt_len, BOOLEAN enhanced);
 void btm_read_ble_local_supported_states_complete(UINT8 *p, UINT16 evt_len);
 tBTM_BLE_CONN_ST btm_ble_get_conn_st(void);
 void btm_ble_set_conn_st(tBTM_BLE_CONN_ST new_st);
-UINT8 *btm_ble_build_adv_data(tBTM_BLE_AD_MASK *p_data_mask, UINT8 **p_dst,
-                              tBTM_BLE_ADV_DATA *p_data);
+UINT8 *btm_ble_build_adv_data(tBTM_BLE_AD_MASK *p_data_mask, UINT8 **p_dst, tBTM_BLE_ADV_DATA *p_data);
 tBTM_STATUS btm_ble_start_adv(void);
 tBTM_STATUS btm_ble_stop_adv(void);
 tBTM_STATUS btm_ble_start_scan(void);
 void btm_ble_create_ll_conn_complete (UINT8 status);
+void btm_ble_create_conn_cancel_complete (UINT8 *p);
+tBTM_STATUS btm_ble_set_random_addr(BD_ADDR random_bda);
 
 /* LE security function from btm_sec.c */
 #if SMP_INCLUDED == TRUE

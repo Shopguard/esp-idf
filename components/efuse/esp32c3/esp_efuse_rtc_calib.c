@@ -1,16 +1,8 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <esp_bit_defs.h>
 #include "esp_efuse.h"
@@ -19,13 +11,14 @@
 int esp_efuse_rtc_calib_get_ver(void)
 {
     uint32_t result = 0;
-    esp_efuse_read_field_blob(ESP_EFUSE_BLOCK2_VERSION, &result, 3);
+    esp_efuse_read_field_blob(ESP_EFUSE_BLK_VERSION_MAJOR, &result, ESP_EFUSE_BLK_VERSION_MAJOR[0]->bit_count); // IDF-5366
     return result;
 }
 
-uint16_t esp_efuse_rtc_calib_get_init_code(int version, int atten)
+uint32_t esp_efuse_rtc_calib_get_init_code(int version, uint32_t adc_unit, int atten)
 {
     assert(version == 1);
+    (void) adc_unit;
     const esp_efuse_desc_t** init_code_efuse;
     assert(atten < 4);
     if (atten == 0) {

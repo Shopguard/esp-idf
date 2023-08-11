@@ -3,21 +3,33 @@
 # Many of these are read when generating flash_app_args & flash_project_args
 idf_build_get_property(target IDF_TARGET)
 idf_build_get_property(python PYTHON)
+idf_build_get_property(idf_path IDF_PATH)
 
 set(chip_model ${target})
-if(target STREQUAL "esp32s3")
-    if(CONFIG_IDF_TARGET_ESP32S3_BETA_VERSION_2)
-        set(chip_model "esp32s3beta2")
-    endif()
+if(target STREQUAL "esp32h2")
+    set(chip_model esp32h2beta1)
 endif()
 
-set(ESPTOOLPY ${python} "${CMAKE_CURRENT_LIST_DIR}/esptool/esptool.py" --chip ${chip_model})
+set(ESPTOOLPY ${python} "$ENV{ESPTOOL_WRAPPER}" "${CMAKE_CURRENT_LIST_DIR}/esptool/esptool.py" --chip ${chip_model})
 set(ESPSECUREPY ${python} "${CMAKE_CURRENT_LIST_DIR}/esptool/espsecure.py")
 set(ESPEFUSEPY ${python} "${CMAKE_CURRENT_LIST_DIR}/esptool/espefuse.py")
+set(ESPMONITOR ${python} "${idf_path}/tools/idf_monitor.py")
 
-set(ESPFLASHMODE ${CONFIG_ESPTOOLPY_FLASHMODE})
+if(CONFIG_SPI_FLASH_HPM_ENABLE)
+# When set flash frequency to 120M, must keep 1st bootloader work under ``DOUT`` mode
+# because on some flash chips, 120M will modify the status register,
+# which will make ROM won't work.
+# This change intends to be for esptool only and the bootloader should keep use
+# ``DOUT`` mode.
+    set(ESPFLASHMODE "dout")
+    message("Note: HPM is enabled for the flash, force the ROM bootloader into DOUT mode for stable boot on")
+else()
+    set(ESPFLASHMODE ${CONFIG_ESPTOOLPY_FLASHMODE})
+endif()
 set(ESPFLASHFREQ ${CONFIG_ESPTOOLPY_FLASHFREQ})
 set(ESPFLASHSIZE ${CONFIG_ESPTOOLPY_FLASHSIZE})
+
+set(ESPTOOLPY_CHIP "${chip_model}")
 
 set(ESPTOOLPY_FLASH_OPTIONS
     --flash_mode ${ESPFLASHMODE}
@@ -39,7 +51,16 @@ if(NOT CONFIG_SECURE_BOOT_ALLOW_SHORT_APP_PARTITION AND
 endif()
 
 if(CONFIG_ESP32_REV_MIN)
-    list(APPEND esptool_elf2image_args --min-rev ${CONFIG_ESP32_REV_MIN})
+    set(min_rev ${CONFIG_ESP32_REV_MIN})
+endif()
+if(CONFIG_ESP32C3_REV_MIN)
+    set(min_rev ${CONFIG_ESP32C3_REV_MIN})
+endif()
+
+if(min_rev)
+    list(APPEND esptool_elf2image_args --min-rev ${min_rev})
+    set(monitor_rev_args "--revision;${min_rev}")
+    unset(min_rev)
 endif()
 
 if(CONFIG_ESPTOOLPY_FLASHSIZE_DETECT)
@@ -101,6 +122,8 @@ endif()
 if(NOT BOOTLOADER_BUILD AND CONFIG_SECURE_SIGNED_APPS)
     if(CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES)
         # for locally signed secure boot image, add a signing step to get from unsigned app to signed app
+        get_filename_component(secure_boot_signing_key "${CONFIG_SECURE_BOOT_SIGNING_KEY}"
+            ABSOLUTE BASE_DIR "${project_dir}")
         add_custom_command(OUTPUT "${build_dir}/.signed_bin_timestamp"
             COMMAND ${ESPSECUREPY} sign_data --version ${secure_boot_version} --keyfile ${secure_boot_signing_key}
                 -o "${build_dir}/${PROJECT_BIN}" "${build_dir}/${unsigned_project_binary}"
@@ -143,8 +166,8 @@ add_custom_target(erase_flash
 add_custom_target(monitor
     COMMAND ${CMAKE_COMMAND}
     -D IDF_PATH="${idf_path}"
-    -D SERIAL_TOOL="${idf_path}/tools/idf_monitor.py"
-    -D SERIAL_TOOL_ARGS="${elf_dir}/${elf}"
+    -D SERIAL_TOOL="${ESPMONITOR}"
+    -D SERIAL_TOOL_ARGS="--target;${target};${monitor_rev_args};${elf_dir}/${elf}"
     -D WORKING_DIRECTORY="${build_dir}"
     -P run_serial_tool.cmake
     WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}

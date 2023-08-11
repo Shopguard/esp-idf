@@ -1,16 +1,9 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#include "sdkconfig.h"
 #include "nvs.hpp"
 #include "nvs_flash.h"
 #include "nvs_storage.hpp"
@@ -18,24 +11,19 @@
 #include "nvs_platform.hpp"
 #include "nvs_partition_manager.hpp"
 #include "esp_partition.h"
-#include "sdkconfig.h"
 #include <functional>
 #include "nvs_handle_simple.hpp"
+#include "nvs_memory_management.hpp"
 #include "esp_err.h"
-
-#ifdef LINUX_TARGET
-#include "crc.h"
-#define ESP_LOGD(...)
-#else // LINUX_TARGET
-#include <esp32/rom/crc.h>
+#include <esp_rom_crc.h>
+#include "nvs_internal.h"
 
 // Uncomment this line to force output from this module
 // #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 #include "esp_log.h"
 static const char* TAG = "nvs";
-#endif // ! LINUX_TARGET
 
-class NVSHandleEntry : public intrusive_list_node<NVSHandleEntry> {
+class NVSHandleEntry : public intrusive_list_node<NVSHandleEntry>, public ExceptionlessAllocatable {
 public:
     NVSHandleEntry(nvs::NVSHandleSimple *handle, const char* part_name)
         : nvs_handle(handle),
@@ -119,7 +107,7 @@ extern "C" esp_err_t nvs_flash_init_partition_ptr(const esp_partition_t *partiti
     }
 
     esp_err_t init_res = NVSPartitionManager::get_instance()->init_custom(part,
-            partition->address / SPI_FLASH_SEC_SIZE,
+            0,
             partition->size / SPI_FLASH_SEC_SIZE);
 
     if (init_res != ESP_OK) {
@@ -311,7 +299,7 @@ extern "C" esp_err_t nvs_open(const char* name, nvs_open_mode_t open_mode, nvs_h
 extern "C" void nvs_close(nvs_handle_t handle)
 {
     Lock lock;
-    ESP_LOGD(TAG, "%s %d", __func__, handle);
+    ESP_LOGD(TAG, "%s %d", __func__, static_cast<int>(handle));
     auto it = find_if(begin(s_nvs_handles), end(s_nvs_handles), [=](NVSHandleEntry& e) -> bool {
         return e.mHandle == handle;
     });
@@ -352,7 +340,7 @@ template<typename T>
 static esp_err_t nvs_set(nvs_handle_t c_handle, const char* key, T value)
 {
     Lock lock;
-    ESP_LOGD(TAG, "%s %s %d %d", __func__, key, sizeof(T), (uint32_t) value);
+    ESP_LOGD(TAG, "%s %s %d %ld", __func__, key, static_cast<int>(sizeof(T)), static_cast<long int>(value));
     NVSHandleSimple *handle;
     auto err = nvs_find_ns_handle(c_handle, &handle);
     if (err != ESP_OK) {
@@ -429,7 +417,7 @@ extern "C" esp_err_t nvs_set_str(nvs_handle_t c_handle, const char* key, const c
 extern "C" esp_err_t nvs_set_blob(nvs_handle_t c_handle, const char* key, const void* value, size_t length)
 {
     Lock lock;
-    ESP_LOGD(TAG, "%s %s %d", __func__, key, length);
+    ESP_LOGD(TAG, "%s %s %d", __func__, key, static_cast<int>(length));
     NVSHandleSimple *handle;
     auto err = nvs_find_ns_handle(c_handle, &handle);
     if (err != ESP_OK) {
@@ -443,7 +431,7 @@ template<typename T>
 static esp_err_t nvs_get(nvs_handle_t c_handle, const char* key, T* out_value)
 {
     Lock lock;
-    ESP_LOGD(TAG, "%s %s %d", __func__, key, sizeof(T));
+    ESP_LOGD(TAG, "%s %s %ld", __func__, key, static_cast<long int>(sizeof(T)));
     NVSHandleSimple *handle;
     auto err = nvs_find_ns_handle(c_handle, &handle);
     if (err != ESP_OK) {
@@ -629,8 +617,8 @@ extern "C" esp_err_t nvs_flash_generate_keys(const esp_partition_t* partition, n
         return err;
     }
 
-    uint32_t crc_calc = crc32_le(0xffffffff, cfg->eky, NVS_KEY_SIZE);
-    crc_calc = crc32_le(crc_calc, cfg->tky, NVS_KEY_SIZE);
+    uint32_t crc_calc = esp_rom_crc32_le(0xffffffff, cfg->eky, NVS_KEY_SIZE);
+    crc_calc = esp_rom_crc32_le(crc_calc, cfg->tky, NVS_KEY_SIZE);
 
     uint8_t crc_wr[16];
     memset(crc_wr, 0xff, sizeof(crc_wr));
@@ -702,8 +690,8 @@ extern "C" esp_err_t nvs_flash_read_security_cfg(const esp_partition_t* partitio
         return err;
     }
 
-    crc_calc = crc32_le(0xffffffff, cfg->eky, NVS_KEY_SIZE);
-    crc_calc = crc32_le(crc_calc, cfg->tky, NVS_KEY_SIZE);
+    crc_calc = esp_rom_crc32_le(0xffffffff, cfg->eky, NVS_KEY_SIZE);
+    crc_calc = esp_rom_crc32_le(crc_calc, cfg->tky, NVS_KEY_SIZE);
 
     if(crc_calc != crc_read) {
         if(!check_if_initialized(cfg->eky, cfg->tky, crc_read)) {
@@ -758,7 +746,7 @@ extern "C" nvs_iterator_t nvs_entry_find(const char *part_name, const char *name
 extern "C" nvs_iterator_t nvs_entry_next(nvs_iterator_t it)
 {
     Lock lock;
-    assert(it);
+    NVS_ASSERT_OR_RETURN(it, nullptr);
 
     bool entryFound = it->storage->nextEntry(it);
     if (!entryFound) {

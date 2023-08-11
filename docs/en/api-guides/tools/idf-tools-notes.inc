@@ -2,6 +2,17 @@
 .. Comments "tool-NAME-notes" act as delimiters.
 
 
+.. tool-xtensa-esp-elf-gdb-notes
+
+
+---
+
+.. tool-riscv32-esp-elf-gdb-notes
+
+
+---
+
+
 .. tool-xtensa-esp32-elf-notes
 
 
@@ -27,11 +38,6 @@
 
 ---
 
-.. tool-esp32s2ulp-elf-notes
-
-
----
-
 .. tool-openocd-esp32-notes
 
 
@@ -40,6 +46,11 @@
 .. tool-cmake-notes
 
 On Linux and macOS, it is recommended to install CMake using the OS-specific package manager (like apt, yum, brew, etc.). However, for convenience it is possible to install CMake using idf_tools.py along with the other tools.
+
+---
+
+.. tool-xtensa-clang-notes
+
 
 ---
 

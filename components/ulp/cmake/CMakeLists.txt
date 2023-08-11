@@ -5,7 +5,7 @@ project(${ULP_APP_NAME} ASM C)
 
 option(ULP_COCPU_IS_RISCV "Use RISC-V based ULP" OFF)
 
-set(version_pattern "[a-z0-9\.-]+")
+set(version_pattern "[a-z0-9\.-_]+")
 
 # Check assembler version
 execute_process(
@@ -17,10 +17,10 @@ string(REGEX MATCH "\\(GNU Binutils\\) (${version_pattern})" as_version ${as_out
 set(as_version ${CMAKE_MATCH_1})
 
 
-message(STATUS "Building ULP app ${ULP_APP_NAME}")
+message(STATUS "Building ULP app ${ULP_APP_NAME} for ${IDF_TARGET}")
 
 if(ULP_COCPU_IS_RISCV)
-    set(ULP_LD_TEMPLATE ${IDF_PATH}/components/ulp/ld/esp32s2.ulp.riscv.ld)
+    set(ULP_LD_TEMPLATE ${IDF_PATH}/components/ulp/ld/${IDF_TARGET}.ulp.riscv.ld)
 else()
     message(STATUS "ULP assembler version: ${as_version}")
 
@@ -38,12 +38,12 @@ else()
                         the toolchain, or proceed at your own risk.")
     endif()
 
-    set(ULP_LD_TEMPLATE ${IDF_PATH}/components/ulp/ld/esp32.ulp.ld)
+    set(ULP_LD_TEMPLATE ${IDF_PATH}/components/ulp/ld/ulp_fsm.ld)
 endif()
 
 
 set(ULP_MAP_GEN ${PYTHON} ${IDF_PATH}/components/ulp/esp32ulp_mapgen.py)
-get_filename_component(sdkconfig_dir ${SDKCONFIG} DIRECTORY)
+get_filename_component(sdkconfig_dir ${SDKCONFIG_HEADER} DIRECTORY)
 
 foreach(include ${COMPONENT_INCLUDES})
     list(APPEND component_includes -I${include})
@@ -62,17 +62,20 @@ get_filename_component(ULP_LD_SCRIPT ${ULP_LD_TEMPLATE} NAME)
 add_custom_command(OUTPUT ${ULP_LD_SCRIPT}
                    COMMAND ${CMAKE_C_COMPILER} -E -P -xc -o ${ULP_LD_SCRIPT} ${ULP_PREPROCESSOR_ARGS} ${ULP_LD_TEMPLATE}
                    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-                   DEPENDS ${ULP_LD_TEMPLATE}
+                   DEPENDS ${ULP_LD_TEMPLATE} ${SDKCONFIG_HEADER}
                    VERBATIM)
 add_custom_target(${ULP_APP_NAME}_ld_script
                   DEPENDS ${ULP_LD_SCRIPT}
                   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
+# To avoid warning "Manually-specified variables were not used by the project"
+set(bypassWarning "${IDF_TARGET}")
 if(ULP_COCPU_IS_RISCV)
     #risc-v ulp uses extra files for building:
     list(APPEND ULP_S_SOURCES
         "${IDF_PATH}/components/ulp/ulp_riscv/start.S"
-        "${IDF_PATH}/components/ulp/ulp_riscv/ulp_riscv_utils.c")
+        "${IDF_PATH}/components/ulp/ulp_riscv/ulp_riscv_utils.c"
+        "${IDF_PATH}/components/ulp/ulp_riscv/ulp_riscv_adc.c")
 
     #dummy loop to force pre-processed linker file generation:
     foreach(ulp_s_source ${ULP_S_SOURCES})
@@ -91,10 +94,13 @@ if(ULP_COCPU_IS_RISCV)
     add_executable(${ULP_APP_NAME} ${ULP_S_SOURCES})
     set(DUMP_SYMBOL_ARGS -g)
     set(MAP_GEN_EXTRA_ARGS --riscv)
-    set(EXTRA_LINKER_ARGS "-nostartfiles -Wl,--gc-sections -Xlinker \
--Map=${CMAKE_CURRENT_BINARY_DIR}/${ULP_APP_NAME}.map")
+    set(EXTRA_LINKER_ARGS "-nostartfiles")
+    list(APPEND EXTRA_LINKER_ARGS "-Wl,--gc-sections")
+    list(APPEND EXTRA_LINKER_ARGS "-Wl,-Map=\"${CMAKE_CURRENT_BINARY_DIR}/${ULP_APP_NAME}.map\"")
     #Makes the csr utillies for riscv visible:
     target_include_directories(${ULP_APP_NAME} PRIVATE "${IDF_PATH}/components/ulp/ulp_riscv/include")
+    target_link_libraries(${ULP_APP_NAME} "-T \"${IDF_PATH}/components/ulp/ld/${IDF_TARGET}.periperals.ld\"")
+    target_compile_definitions(${ULP_APP_NAME} PRIVATE IS_ULP_COCPU)
 
 else()
 
@@ -119,7 +125,7 @@ else()
     add_executable(${ULP_APP_NAME} ${ULP_PS_SOURCES})
     set(DUMP_SYMBOL_ARGS -g -f posix)
     set(MAP_GEN_EXTRA_ARGS .)
-    set(EXTRA_LINKER_ARGS "-Map=${CMAKE_CURRENT_BINARY_DIR}/${ULP_APP_NAME}.map")
+    set(EXTRA_LINKER_ARGS "-Map=\"${CMAKE_CURRENT_BINARY_DIR}/${ULP_APP_NAME}.map\"")
 
 endif()
 
@@ -148,4 +154,6 @@ add_custom_target(build
                         ${CMAKE_CURRENT_BINARY_DIR}/${ULP_APP_NAME}.h
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
-target_link_libraries(${ULP_APP_NAME} -T${CMAKE_CURRENT_BINARY_DIR}/${ULP_LD_SCRIPT} ${EXTRA_LINKER_ARGS})
+target_link_libraries(${ULP_APP_NAME} "-T\"${CMAKE_CURRENT_BINARY_DIR}/${ULP_LD_SCRIPT}\"")
+target_link_libraries(${ULP_APP_NAME} ${EXTRA_LINKER_ARGS})
+set_target_properties(${ULP_APP_NAME} PROPERTIES LINK_DEPENDS ${ULP_LD_SCRIPT})

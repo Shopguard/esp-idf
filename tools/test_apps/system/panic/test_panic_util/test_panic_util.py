@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import sys
+from subprocess import Popen
 
 import ttfw_idf
 from pygdbmi.gdbcontroller import GdbController
@@ -12,6 +13,26 @@ from tiny_test_fw.Utility import CaseConfig, SearchCases
 # hard-coded to the path one level above - only intended to be used from the panic test app
 TEST_PATH = os.path.relpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'), os.getenv('IDF_PATH'))
 TEST_SUITE = 'Panic'
+
+
+class NoGdbProcessError(ValueError):
+    """Raise when trying to interact with gdb subprocess, but it does not exist.
+    It may have been killed and removed, or failed to initialize for some reason."""
+
+    pass
+
+
+def verify_valid_gdb_subprocess(gdb_process: Popen) -> None:
+    """Verify there is a process object, and that it is still running.
+    Raise NoGdbProcessError if either of the above are not true."""
+    if not gdb_process:
+        raise NoGdbProcessError('gdb process is not attached')
+
+    elif gdb_process.poll() is not None:
+        raise NoGdbProcessError(
+            'gdb process has already finished with return code: %s'
+            % str(gdb_process.poll())
+        )
 
 
 def ok(data):
@@ -144,6 +165,13 @@ class PanicTestMixin(object):
         output_file_name = os.path.join(log_folder, 'coredump_flash_result_' + self.test_name + '.txt')
         self._call_espcoredump(['--core-format', 'raw'], coredump_file_name, output_file_name)
 
+    def _gdb_write(self, command):
+        """
+        Wrapper to write to gdb with a longer timeout, as test runner
+        host can be slow sometimes
+        """
+        return self.gdb.write(command, timeout_sec=10)
+
     def start_gdb(self):
         """
         Runs GDB and connects it to the "serial" port of the DUT.
@@ -153,7 +181,43 @@ class PanicTestMixin(object):
         self._port_close()
 
         Utility.console_log('Starting GDB...', 'orange')
-        self.gdb = GdbController(gdb_path=self.TOOLCHAIN_PREFIX + 'gdb')
+        gdb_path = self.TOOLCHAIN_PREFIX + 'gdb'
+        try:
+            from pygdbmi.constants import GdbTimeoutError
+            default_gdb_args = ['--nx', '--quiet', '--interpreter=mi2']
+            gdb_command = [gdb_path] + default_gdb_args
+            self.gdb = GdbController(command=gdb_command)
+        except ImportError:
+            # fallback for pygdbmi<0.10.0.0.
+            from pygdbmi.gdbcontroller import GdbTimeoutError
+            self.gdb = GdbController(gdb_path=gdb_path)
+
+        try:
+            gdb_command = self.gdb.command
+        except AttributeError:
+            # fallback for pygdbmi < 0.10
+            gdb_command = self.gdb.cmd
+
+        Utility.console_log('Running command: {}'.format(gdb_command), 'orange')
+
+        for _ in range(10):
+            try:
+                # GdbController creates a process with subprocess.Popen(). Is it really running? It is probable that
+                # an RPI under high load will get non-responsive during creating a lot of processes.
+                if not hasattr(self.gdb, 'verify_valid_gdb_subprocess'):
+                    # for pygdbmi >= 0.10.0.0
+                    verify_valid_gdb_subprocess(self.gdb.gdb_process)
+                resp = self.gdb.get_gdb_response(timeout_sec=10)  # calls verify_valid_gdb_subprocess() internally (pygdbmi < 0.10)
+                # it will be interesting to look up this response if the next GDB command fails (times out)
+                Utility.console_log('GDB response: {}'.format(resp), 'orange')
+                break  # success
+            except GdbTimeoutError:
+                Utility.console_log('GDB internal error: cannot get response from the subprocess', 'orange')
+            except NoGdbProcessError:
+                Utility.console_log('GDB internal error: process is not running', 'red')
+                break  # failure - TODO: create another GdbController
+            except ValueError:
+                Utility.console_log('GDB internal error: select() returned an unexpected file number', 'red')
 
         # pygdbmi logs to console by default, make it log to a file instead
         log_folder = self.app.get_log_folder(TEST_SUITE)
@@ -168,20 +232,20 @@ class PanicTestMixin(object):
 
         # Set up logging for GDB remote protocol
         gdb_remotelog_file_name = os.path.join(log_folder, 'gdb_remote_log_' + self.test_name + '.txt')
-        self.gdb.write('-gdb-set remotelogfile ' + gdb_remotelog_file_name)
+        self._gdb_write('-gdb-set remotelogfile ' + gdb_remotelog_file_name)
 
         # Load the ELF file
-        self.gdb.write('-file-exec-and-symbols {}'.format(self.app.elf_file))
+        self._gdb_write('-file-exec-and-symbols {}'.format(self.app.elf_file))
 
         # Connect GDB to UART
         Utility.console_log('Connecting to GDB Stub...', 'orange')
-        self.gdb.write('-gdb-set serial baud 115200')
-        responses = self.gdb.write('-target-select remote ' + self.get_gdb_remote(), timeout_sec=3)
+        self._gdb_write('-gdb-set serial baud 115200')
+        responses = self._gdb_write('-target-select remote ' + self.get_gdb_remote())
 
         # Make sure we get the 'stopped' notification
         stop_response = self.find_gdb_response('stopped', 'notify', responses)
         if not stop_response:
-            responses = self.gdb.write('-exec-interrupt', timeout_sec=3)
+            responses = self._gdb_write('-exec-interrupt')
             stop_response = self.find_gdb_response('stopped', 'notify', responses)
             assert stop_response
         frame = stop_response['payload']['frame']
@@ -201,7 +265,7 @@ class PanicTestMixin(object):
         """
         assert self.gdb
 
-        responses = self.gdb.write('-stack-list-frames', timeout_sec=3)
+        responses = self._gdb_write('-stack-list-frames')
         return self.find_gdb_response('done', 'result', responses)['payload']['stack']
 
     @staticmethod

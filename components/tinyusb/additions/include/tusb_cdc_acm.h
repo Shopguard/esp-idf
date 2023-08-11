@@ -95,7 +95,7 @@ typedef void(*tusb_cdcacm_callback_t)(int itf, cdcacm_event_t *event);
 typedef struct {
     tinyusb_usbdev_t usb_dev; /*!< Usb device to set up */
     tinyusb_cdcacm_itf_t cdc_port;  /*!< CDC port */
-    size_t rx_unread_buf_sz; /*!< Amount of data that can be passed to the AMC at once */
+    size_t rx_unread_buf_sz; /*!< Amount of data that can be passed to the ACM at once */
     tusb_cdcacm_callback_t callback_rx;  /*!< Pointer to the function with the `tusb_cdcacm_callback_t` type that will be handled as a callback */
     tusb_cdcacm_callback_t callback_rx_wanted_char; /*!< Pointer to the function with the `tusb_cdcacm_callback_t` type that will be handled as a callback */
     tusb_cdcacm_callback_t callback_line_state_changed; /*!< Pointer to the function with the `tusb_cdcacm_callback_t` type that will be handled as a callback */
@@ -157,7 +157,7 @@ size_t tinyusb_cdcacm_write_queue_char(tinyusb_cdcacm_itf_t itf, char ch);
  * @param in_size - size to write from arr_src
  * @return size_t - amount of queued bytes
  */
-size_t tinyusb_cdcacm_write_queue(tinyusb_cdcacm_itf_t itf, uint8_t *in_buf, size_t in_size);
+size_t tinyusb_cdcacm_write_queue(tinyusb_cdcacm_itf_t itf, const uint8_t *in_buf, size_t in_size);
 
 /**
  * @brief Send all data from a write buffer. Use `tinyusb_cdcacm_write_queue` to add data to the buffer.

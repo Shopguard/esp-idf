@@ -15,7 +15,7 @@
 #include "esp_netif.h"
 #include "esp_eth.h"
 #include "protocol_examples_common.h"
-
+#include "lwip/sockets.h"
 #include <esp_https_server.h>
 #include "keep_alive.h"
 
@@ -38,6 +38,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
     httpd_ws_frame_t ws_pkt;
+    uint8_t *buf = NULL;
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
 
     // First receive the full ws message
@@ -48,31 +49,42 @@ static esp_err_t ws_handler(httpd_req_t *req)
         return ret;
     }
     ESP_LOGI(TAG, "frame len is %d", ws_pkt.len);
-    /* ws_pkt.len + 1 is for NULL termination as we are expecting a string */
-    uint8_t *buf = calloc(1, ws_pkt.len + 1);
-    if (buf == NULL) {
-        ESP_LOGE(TAG, "Failed to calloc memory for buf");
-        return ESP_ERR_NO_MEM;
+    if (ws_pkt.len) {
+        /* ws_pkt.len + 1 is for NULL termination as we are expecting a string */
+        buf = calloc(1, ws_pkt.len + 1);
+        if (buf == NULL) {
+            ESP_LOGE(TAG, "Failed to calloc memory for buf");
+            return ESP_ERR_NO_MEM;
+        }
+        ws_pkt.payload = buf;
+        /* Set max_len = ws_pkt.len to get the frame payload */
+        ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "httpd_ws_recv_frame failed with %d", ret);
+            free(buf);
+            return ret;
+        }
     }
-    ws_pkt.payload = buf;
-    /* Set max_len = ws_pkt.len to get the frame payload */
-    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_ws_recv_frame failed with %d", ret);
-        return ret;
-    }
-
     // If it was a PONG, update the keep-alive
     if (ws_pkt.type == HTTPD_WS_TYPE_PONG) {
         ESP_LOGD(TAG, "Received PONG message");
         free(buf);
-        buf = NULL;
         return wss_keep_alive_client_is_active(httpd_get_global_user_ctx(req->handle),
                 httpd_req_to_sockfd(req));
 
     // If it was a TEXT message, just echo it back
-    } else if (ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
-        ESP_LOGI(TAG, "Received packet with message: %s", ws_pkt.payload);
+    } else if (ws_pkt.type == HTTPD_WS_TYPE_TEXT || ws_pkt.type == HTTPD_WS_TYPE_PING || ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
+        if (ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
+            ESP_LOGI(TAG, "Received packet with message: %s", ws_pkt.payload);
+        } else if (ws_pkt.type == HTTPD_WS_TYPE_PING) {
+            // Response PONG packet to peer
+            ESP_LOGI(TAG, "Got a WS PING frame, Replying PONG");
+            ws_pkt.type = HTTPD_WS_TYPE_PONG;
+        } else if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
+            // Response CLOSE packet with no payload to peer
+            ws_pkt.len = 0;
+            ws_pkt.payload = NULL;
+        }
         ret = httpd_ws_send_frame(req, &ws_pkt);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "httpd_ws_send_frame failed with %d", ret);
@@ -80,11 +92,9 @@ static esp_err_t ws_handler(httpd_req_t *req)
         ESP_LOGI(TAG, "ws_handler: httpd_handle_t=%p, sockfd=%d, client_info:%d", req->handle,
                  httpd_req_to_sockfd(req), httpd_ws_get_fd_info(req->handle, httpd_req_to_sockfd(req)));
         free(buf);
-        buf = NULL;
         return ret;
     }
     free(buf);
-    buf = NULL;
     return ESP_OK;
 }
 
@@ -100,6 +110,7 @@ void wss_close_fd(httpd_handle_t hd, int sockfd)
     ESP_LOGI(TAG, "Client disconnected %d", sockfd);
     wss_keep_alive_t h = httpd_get_global_user_ctx(hd);
     wss_keep_alive_remove_client(h, sockfd);
+    close(sockfd);
 }
 
 static const httpd_uri_t ws = {

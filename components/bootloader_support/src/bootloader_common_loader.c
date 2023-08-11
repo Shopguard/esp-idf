@@ -1,16 +1,8 @@
-// Copyright 2020 Espressif Systems (Shanghai) Co., Ltd.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include "string.h"
 #include "sdkconfig.h"
@@ -30,6 +22,8 @@
 #include "soc/gpio_periph.h"
 #include "soc/rtc.h"
 #include "soc/efuse_reg.h"
+#include "hal/efuse_hal.h"
+#include "soc/soc_memory_types.h"
 #include "hal/gpio_ll.h"
 #include "esp_image_format.h"
 #include "bootloader_sha.h"
@@ -74,15 +68,27 @@ esp_err_t bootloader_common_check_chip_validity(const esp_image_header_t* img_hd
         ESP_LOGE(TAG, "mismatch chip ID, expected %d, found %d", chip_id, img_hdr->chip_id);
         err = ESP_FAIL;
     }
-    uint8_t revision = bootloader_common_get_chip_revision();
+
+#ifndef CONFIG_IDF_ENV_FPGA
+#if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32H2)
+    uint8_t revision = efuse_hal_get_major_chip_version();
+    // min_chip_rev keeps the MAJOR wafer version for these chips
+#else
+    uint8_t revision = efuse_hal_get_minor_chip_version();
+    // min_chip_rev keeps the MINOR wafer version for these chips
+#endif
     if (revision < img_hdr->min_chip_rev) {
-        ESP_LOGE(TAG, "can't run on lower chip revision, expected %d, found %d", revision, img_hdr->min_chip_rev);
+        /* To fix this error, please update mininum supported chip revision from configuration,
+         * located in TARGET (e.g. ESP32) specific options under "Component config" menu */
+        ESP_LOGE(TAG, "This chip is revision %d but the application is configured for minimum revision %d. Can't run.", revision, img_hdr->min_chip_rev);
         err = ESP_FAIL;
     } else if (revision != img_hdr->min_chip_rev) {
 #ifdef BOOTLOADER_BUILD
         ESP_LOGI(TAG, "chip revision: %d, min. %s chip revision: %d", revision, type == ESP_IMAGE_BOOTLOADER ? "bootloader" : "application", img_hdr->min_chip_rev);
 #endif
     }
+#endif // CONFIG_IDF_ENV_FPGA
+
     return err;
 }
 
@@ -138,16 +144,41 @@ esp_err_t bootloader_common_get_partition_description(const esp_partition_pos_t 
 
 #if defined( CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP ) || defined( CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC )
 
-rtc_retain_mem_t *const rtc_retain_mem = (rtc_retain_mem_t *)(SOC_RTC_DRAM_HIGH - sizeof(rtc_retain_mem_t));
+#define RTC_RETAIN_MEM_ADDR (SOC_RTC_DRAM_HIGH - sizeof(rtc_retain_mem_t))
+
+_Static_assert(RTC_RETAIN_MEM_ADDR >= SOC_RTC_DRAM_LOW, "rtc_retain_mem_t structure size is bigger than the RTC memory size. Consider reducing RTC reserved memory size.");
+
+rtc_retain_mem_t *const rtc_retain_mem = (rtc_retain_mem_t *)RTC_RETAIN_MEM_ADDR;
+
+#ifndef BOOTLOADER_BUILD
+#include "heap_memory_layout.h"
+/* The app needs to be told this memory is reserved, important if configured to use RTC memory as heap.
+
+   Note that keeping this macro here only works when other symbols in this file are referenced by the app, as
+   this feature is otherwise 100% part of the bootloader. However this seems to happen in all apps.
+ */
+SOC_RESERVE_MEMORY_REGION(RTC_RETAIN_MEM_ADDR, RTC_RETAIN_MEM_ADDR + sizeof(rtc_retain_mem_t), rtc_retain_mem);
+#endif
+
+static uint32_t rtc_retain_mem_size(void) {
+#ifdef CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC
+    /* A custom memory has been reserved by the user, do not consider this memory into CRC calculation as it may change without
+     * the have the user updating the CRC. Return the offset of the custom field, which is equivalent to size of the structure
+     * minus the size of everything after (including) `custom` */
+    return offsetof(rtc_retain_mem_t, custom);
+#else
+    return sizeof(rtc_retain_mem_t) - sizeof(rtc_retain_mem->crc);
+#endif
+}
 
 static bool check_rtc_retain_mem(void)
 {
-    return esp_rom_crc32_le(UINT32_MAX, (uint8_t*)rtc_retain_mem, sizeof(rtc_retain_mem_t) - sizeof(rtc_retain_mem->crc)) == rtc_retain_mem->crc && rtc_retain_mem->crc != UINT32_MAX;
+    return esp_rom_crc32_le(UINT32_MAX, (uint8_t*)rtc_retain_mem, rtc_retain_mem_size()) == rtc_retain_mem->crc && rtc_retain_mem->crc != UINT32_MAX;
 }
 
 static void update_rtc_retain_mem_crc(void)
 {
-    rtc_retain_mem->crc = esp_rom_crc32_le(UINT32_MAX, (uint8_t*)rtc_retain_mem, sizeof(rtc_retain_mem_t) - sizeof(rtc_retain_mem->crc));
+    rtc_retain_mem->crc = esp_rom_crc32_le(UINT32_MAX, (uint8_t*)rtc_retain_mem, rtc_retain_mem_size());
 }
 
 void bootloader_common_reset_rtc_retain_mem(void)

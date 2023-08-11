@@ -1,16 +1,8 @@
-// Copyright 2015-2018 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <string.h>
 #include "esp_types.h"
@@ -68,6 +60,7 @@ typedef struct {
     QueueHandle_t trans_queue;
     QueueHandle_t ret_queue;
     bool dma_enabled;
+    bool cs_iomux;
     uint32_t tx_dma_chan;
     uint32_t rx_dma_chan;
 #ifdef CONFIG_PM_ENABLE
@@ -77,7 +70,7 @@ typedef struct {
 
 static spi_slave_t *spihost[SOC_SPI_PERIPH_NUM];
 
-static void IRAM_ATTR spi_intr(void *arg);
+static void SPI_SLAVE_ISR_ATTR spi_intr(void *arg);
 
 static inline bool is_valid_host(spi_host_device_t host)
 {
@@ -91,21 +84,21 @@ static inline bool is_valid_host(spi_host_device_t host)
 #endif
 }
 
-static inline bool bus_is_iomux(spi_slave_t *host)
+static inline bool SPI_SLAVE_ISR_ATTR bus_is_iomux(spi_slave_t *host)
 {
     return host->flags&SPICOMMON_BUSFLAG_IOMUX_PINS;
 }
 
-static void freeze_cs(spi_slave_t *host)
+static void SPI_SLAVE_ISR_ATTR freeze_cs(spi_slave_t *host)
 {
     esp_rom_gpio_connect_in_signal(GPIO_MATRIX_CONST_ONE_INPUT, spi_periph_signal[host->id].spics_in, false);
 }
 
 // Use this function instead of cs_initial to avoid overwrite the output config
 // This is used in test by internal gpio matrix connections
-static inline void restore_cs(spi_slave_t *host)
+static inline void SPI_SLAVE_ISR_ATTR restore_cs(spi_slave_t *host)
 {
-    if (bus_is_iomux(host)) {
+    if (host->cs_iomux) {
         gpio_iomux_in(host->cfg.spics_io_num, spi_periph_signal[host->id].spics_in);
     } else {
         esp_rom_gpio_connect_in_signal(host->cfg.spics_io_num, spi_periph_signal[host->id].spics_in, false);
@@ -119,7 +112,6 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
     uint32_t actual_rx_dma_chan = 0;
     esp_err_t ret = ESP_OK;
     esp_err_t err;
-    //We only support HSPI/VSPI, period.
     SPI_CHECK(is_valid_host(host), "invalid host", ESP_ERR_INVALID_ARG);
 #ifdef CONFIG_IDF_TARGET_ESP32
     SPI_CHECK(dma_chan >= SPI_DMA_DISABLED && dma_chan <= SPI_DMA_CH_AUTO, "invalid dma channel", ESP_ERR_INVALID_ARG );
@@ -149,7 +141,7 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
     bool use_dma = (dma_chan != SPI_DMA_DISABLED);
     spihost[host]->dma_enabled = use_dma;
     if (use_dma) {
-        ret = spicommon_slave_dma_chan_alloc(host, dma_chan, &actual_tx_dma_chan, &actual_rx_dma_chan);
+        ret = spicommon_dma_chan_alloc(host, dma_chan, &actual_tx_dma_chan, &actual_rx_dma_chan);
         if (ret != ESP_OK) {
             goto cleanup;
         }
@@ -162,6 +154,8 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
     }
     if (slave_config->spics_io_num >= 0) {
         spicommon_cs_initialize(host, slave_config->spics_io_num, 0, !bus_is_iomux(spihost[host]));
+        // check and save where cs line really route through
+        spihost[host]->cs_iomux = (slave_config->spics_io_num == spi_periph_signal[host].spics0_iomux_pin) && bus_is_iomux(spihost[host]);
     }
 
     // The slave DMA suffers from unexpected transactions. Forbid reading if DMA is enabled by disabling the CS line.
@@ -249,7 +243,7 @@ cleanup:
     }
     spi_slave_hal_deinit(&spihost[host]->hal);
     if (spihost[host]->dma_enabled) {
-        spicommon_slave_free_dma(host);
+        spicommon_dma_chan_free(host);
     }
 
     free(spihost[host]);
@@ -266,7 +260,7 @@ esp_err_t spi_slave_free(spi_host_device_t host)
     if (spihost[host]->trans_queue) vQueueDelete(spihost[host]->trans_queue);
     if (spihost[host]->ret_queue) vQueueDelete(spihost[host]->ret_queue);
     if (spihost[host]->dma_enabled) {
-        spicommon_slave_free_dma(host);
+        spicommon_dma_chan_free(host);
     }
     free(spihost[host]->hal.dmadesc_tx);
     free(spihost[host]->hal.dmadesc_rx);
@@ -326,11 +320,13 @@ esp_err_t SPI_SLAVE_ATTR spi_slave_transmit(spi_host_device_t host, spi_slave_tr
     return ESP_OK;
 }
 
+#if CONFIG_IDF_TARGET_ESP32
 static void SPI_SLAVE_ISR_ATTR spi_slave_restart_after_dmareset(void *arg)
 {
     spi_slave_t *host = (spi_slave_t *)arg;
     esp_intr_enable(host->intr);
 }
+#endif  //#if CONFIG_IDF_TARGET_ESP32
 
 //This is run in interrupt context and apart from initialization and destruction, this is the only code
 //touching the host (=spihost[x]) variable. The rest of the data arrives in queues. That is why there are
@@ -353,18 +349,25 @@ static void SPI_SLAVE_ISR_ATTR spi_intr(void *arg)
         spi_slave_hal_store_result(hal);
         host->cur_trans->trans_len = spi_slave_hal_get_rcv_bitlen(hal);
 
+#if CONFIG_IDF_TARGET_ESP32
+        //This workaround is only for esp32
         if (spi_slave_hal_dma_need_reset(hal)) {
-            //On ESP32 and ESP32S2, actual_tx_dma_chan and actual_rx_dma_chan are always same
+            //On ESP32, actual_tx_dma_chan and actual_rx_dma_chan are always same
             spicommon_dmaworkaround_req_reset(host->tx_dma_chan, spi_slave_restart_after_dmareset, host);
         }
+#endif  //#if CONFIG_IDF_TARGET_ESP32
+
         if (host->cfg.post_trans_cb) host->cfg.post_trans_cb(host->cur_trans);
         //Okay, transaction is done.
         //Return transaction descriptor.
         xQueueSendFromISR(host->ret_queue, &host->cur_trans, &do_yield);
         host->cur_trans = NULL;
     }
+
+#if CONFIG_IDF_TARGET_ESP32
+    //This workaround is only for esp32
     if (use_dma) {
-        //On ESP32 and ESP32S2, actual_tx_dma_chan and actual_rx_dma_chan are always same
+        //On ESP32, actual_tx_dma_chan and actual_rx_dma_chan are always same
         spicommon_dmaworkaround_idle(host->tx_dma_chan);
         if (spicommon_dmaworkaround_reset_in_progress()) {
             //We need to wait for the reset to complete. Disable int (will be re-enabled on reset callback) and exit isr.
@@ -373,6 +376,7 @@ static void SPI_SLAVE_ISR_ATTR spi_intr(void *arg)
             return;
         }
     }
+#endif  //#if CONFIG_IDF_TARGET_ESP32
 
     //Disable interrupt before checking to avoid concurrency issue.
     esp_intr_disable(host->intr);
@@ -389,10 +393,13 @@ static void SPI_SLAVE_ISR_ATTR spi_intr(void *arg)
         hal->rx_buffer = trans->rx_buffer;
         hal->tx_buffer = trans->tx_buffer;
 
+#if CONFIG_IDF_TARGET_ESP32
         if (use_dma) {
-            //On ESP32 and ESP32S2, actual_tx_dma_chan and actual_rx_dma_chan are always same
+            //This workaround is only for esp32
+            //On ESP32, actual_tx_dma_chan and actual_rx_dma_chan are always same
             spicommon_dmaworkaround_transfer_active(host->tx_dma_chan);
         }
+#endif  //#if CONFIG_IDF_TARGET_ESP32
 
         spi_slave_hal_prepare_data(hal);
 

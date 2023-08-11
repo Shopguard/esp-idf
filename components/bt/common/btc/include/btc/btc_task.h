@@ -28,7 +28,7 @@ typedef struct btc_msg {
     uint8_t aid;    //application id
     uint8_t pid;    //profile id
     uint8_t act;    //profile action, defined in seprerate header files
-    void   *arg;    //param for btc function or function param
+    UINT8   arg[0]; //param for btc function or function param
 } btc_msg_t;
 
 typedef struct btc_adv_packet {
@@ -65,6 +65,8 @@ typedef enum {
     BTC_PID_AVRC_CT,
     BTC_PID_AVRC_TG,
     BTC_PID_SPP,
+    BTC_PID_HD,
+    BTC_PID_HH,
 #if (BTC_HF_INCLUDED == TRUE)
     BTC_PID_HF,
 #endif /* BTC_HF_INCLUDED */
@@ -98,6 +100,11 @@ typedef struct {
 } btc_func_t;
 
 typedef void (* btc_arg_deep_copy_t)(btc_msg_t *msg, void *dst, void *src);
+typedef void (* btc_arg_deep_free_t)(btc_msg_t *msg);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
  * transfer an message to another module in the different task.
@@ -105,23 +112,35 @@ typedef void (* btc_arg_deep_copy_t)(btc_msg_t *msg, void *dst, void *src);
  * @param  arg       paramter
  * @param  arg_len   length of paramter
  * @param  copy_func deep copy function
+ * @param  free_func deep free function
  * @return           BT_STATUS_SUCCESS: success
  *                   others: fail
  */
-bt_status_t btc_transfer_context(btc_msg_t *msg, void *arg, int arg_len, btc_arg_deep_copy_t copy_func);
+bt_status_t btc_transfer_context(btc_msg_t *msg, void *arg, int arg_len, btc_arg_deep_copy_t copy_func,
+                                    btc_arg_deep_free_t free_func);
 
 /**
  * transfer an message to another module in tha same task.
  * @param  msg       message
- * @param  arg       paramter
  * @return           BT_STATUS_SUCCESS: success
  *                   others: fail
  */
-bt_status_t btc_inter_profile_call(btc_msg_t *msg, void *arg);
+bt_status_t btc_inter_profile_call(btc_msg_t *msg);
 
 bt_status_t btc_init(void);
 void btc_deinit(void);
 bool btc_check_queue_is_congest(void);
 int get_btc_work_queue_size(void);
+
+/**
+ * get the BTC thread handle
+ * @return           NULL: fail
+ *                   others: pointer of osi_thread structure of BTC
+ */
+osi_thread_t *btc_get_current_thread(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __BTC_TASK_H__ */

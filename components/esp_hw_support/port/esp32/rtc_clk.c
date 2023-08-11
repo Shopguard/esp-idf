@@ -1,16 +1,8 @@
-// Copyright 2015-2017 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -24,11 +16,14 @@
 #include "soc/rtc_periph.h"
 #include "soc/sens_periph.h"
 #include "soc/dport_reg.h"
+#include "hal/efuse_ll.h"
+#include "hal/efuse_hal.h"
 #include "soc/efuse_periph.h"
-#include "soc/apb_ctrl_reg.h"
+#include "soc/syscon_reg.h"
 #include "soc/gpio_struct.h"
 #include "hal/cpu_hal.h"
 #include "hal/gpio_ll.h"
+#include "esp_rom_sys.h"
 #include "regi2c_ctrl.h"
 #include "soc_log.h"
 #include "sdkconfig.h"
@@ -129,7 +124,7 @@ static void rtc_clk_32k_enable_common(int dac, int dres, int dbias)
     REG_SET_FIELD(RTC_IO_XTAL_32K_PAD_REG, RTC_IO_DBIAS_XTAL_32K, dbias);
 
 #ifdef CONFIG_ESP32_RTC_EXT_CRYST_ADDIT_CURRENT
-    uint8_t chip_ver = esp_efuse_get_chip_ver();
+    uint8_t chip_ver = efuse_hal_get_major_chip_version();
     // version0 and version1 need provide additional current to external XTAL.
     if(chip_ver == 0 || chip_ver == 1) {
         /* TOUCH sensor can provide additional current to external XTAL.
@@ -145,7 +140,7 @@ static void rtc_clk_32k_enable_common(int dac, int dres, int dbias)
         SET_PERI_REG_MASK(RTC_IO_TOUCH_PAD9_REG, RTC_IO_TOUCH_PAD9_XPD_M);
     }
 #elif defined CONFIG_ESP32_RTC_EXT_CRYST_ADDIT_CURRENT_V2
-    uint8_t chip_ver = esp_efuse_get_chip_ver();
+    uint8_t chip_ver = efuse_hal_get_major_chip_version();
     if(chip_ver == 0 || chip_ver == 1) {
         /* TOUCH sensor can provide additional current to external XTAL.
         In some case, X32N and X32P PAD don't have enough drive capability to start XTAL */
@@ -179,13 +174,13 @@ void rtc_clk_32k_enable(bool enable)
         CLEAR_PERI_REG_MASK(RTC_IO_XTAL_32K_PAD_REG, RTC_IO_X32N_MUX_SEL | RTC_IO_X32P_MUX_SEL);
 
 #ifdef CONFIG_ESP32_RTC_EXT_CRYST_ADDIT_CURRENT
-        uint8_t chip_ver = esp_efuse_get_chip_ver();
+        uint8_t chip_ver = efuse_hal_get_major_chip_version();
         if(chip_ver == 0 || chip_ver == 1) {
             /* Power down TOUCH */
             CLEAR_PERI_REG_MASK(RTC_IO_TOUCH_PAD9_REG, RTC_IO_TOUCH_PAD9_XPD_M);
         }
 #elif defined CONFIG_ESP32_RTC_EXT_CRYST_ADDIT_CURRENT_V2
-        uint8_t chip_ver = esp_efuse_get_chip_ver();
+        uint8_t chip_ver = efuse_hal_get_major_chip_version();
         if(chip_ver == 0 || chip_ver == 1) {
             /* Power down TOUCH */
             CLEAR_PERI_REG_MASK(RTC_IO_TOUCH_CFG_REG, RTC_IO_TOUCH_XPD_BIAS_M);
@@ -251,8 +246,7 @@ void rtc_clk_8m_enable(bool clk_8m_en, bool d256_en)
 {
     if (clk_8m_en) {
         CLEAR_PERI_REG_MASK(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_ENB_CK8M);
-        /* no need to wait once enabled by software */
-        REG_SET_FIELD(RTC_CNTL_TIMER1_REG, RTC_CNTL_CK8M_WAIT, 1);
+        REG_SET_FIELD(RTC_CNTL_TIMER1_REG, RTC_CNTL_CK8M_WAIT, RTC_CK8M_ENABLE_WAIT_DEFAULT);
         if (d256_en) {
             CLEAR_PERI_REG_MASK(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_ENB_CK8M_DIV);
         } else {
@@ -289,8 +283,7 @@ void rtc_clk_apll_enable(bool enable, uint32_t sdm0, uint32_t sdm1, uint32_t sdm
 
     if (enable) {
         uint8_t sdm_stop_val_2 = APLL_SDM_STOP_VAL_2_REV1;
-        uint32_t is_rev0 = (GET_PERI_REG_BITS2(EFUSE_BLK0_RDATA3_REG, 1, 15) == 0);
-        if (is_rev0) {
+        if (efuse_hal_get_major_chip_version() == 0) {
             sdm0 = 0;
             sdm1 = 0;
             sdm_stop_val_2 = APLL_SDM_STOP_VAL_2_REV0;
@@ -462,9 +455,9 @@ void rtc_clk_cpu_freq_to_xtal(int freq, int div)
 {
     ets_update_cpu_frequency(freq);
     /* set divider from XTAL to APB clock */
-    REG_SET_FIELD(APB_CTRL_SYSCLK_CONF_REG, APB_CTRL_PRE_DIV_CNT, div - 1);
+    REG_SET_FIELD(SYSCON_SYSCLK_CONF_REG, SYSCON_PRE_DIV_CNT, div - 1);
     /* adjust ref_tick */
-    REG_WRITE(APB_CTRL_XTAL_TICK_CONF_REG, freq * MHZ / REF_CLK_FREQ - 1);
+    REG_WRITE(SYSCON_XTAL_TICK_CONF_REG, freq * MHZ / REF_CLK_FREQ - 1);
     /* switch clock source */
     REG_SET_FIELD(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_SOC_CLK_SEL, RTC_CNTL_SOC_CLK_SEL_XTL);
     rtc_clk_apb_freq_update(freq * MHZ);
@@ -480,7 +473,7 @@ static void rtc_clk_cpu_freq_to_8m(void)
 {
     ets_update_cpu_frequency(8);
     REG_SET_FIELD(RTC_CNTL_REG, RTC_CNTL_DIG_DBIAS_WAK, DIG_DBIAS_XTAL);
-    REG_SET_FIELD(APB_CTRL_SYSCLK_CONF_REG, APB_CTRL_PRE_DIV_CNT, 0);
+    REG_SET_FIELD(SYSCON_SYSCLK_CONF_REG, SYSCON_PRE_DIV_CNT, 0);
     REG_SET_FIELD(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_SOC_CLK_SEL, RTC_CNTL_SOC_CLK_SEL_8M);
     rtc_clk_apb_freq_update(RTC_FAST_CLK_FREQ_8M);
 }
@@ -683,7 +676,7 @@ void rtc_clk_cpu_freq_get_config(rtc_cpu_freq_config_t* out_config)
     switch (soc_clk_sel) {
         case RTC_CNTL_SOC_CLK_SEL_XTL: {
             source = RTC_CPU_FREQ_SRC_XTAL;
-            div = REG_GET_FIELD(APB_CTRL_SYSCLK_CONF_REG, APB_CTRL_PRE_DIV_CNT) + 1;
+            div = REG_GET_FIELD(SYSCON_SYSCLK_CONF_REG, SYSCON_PRE_DIV_CNT) + 1;
             source_freq_mhz = (uint32_t) rtc_clk_xtal_freq_get();
             freq_mhz = source_freq_mhz / div;
         }
@@ -767,6 +760,9 @@ void rtc_clk_apb_freq_update(uint32_t apb_freq)
 
 uint32_t rtc_clk_apb_freq_get(void)
 {
+#if CONFIG_IDF_ENV_FPGA
+    return CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ * MHZ;
+#endif // CONFIG_IDF_ENV_FPGA
     uint32_t freq_hz = reg_val_to_clk_val(READ_PERI_REG(RTC_APB_FREQ_REG)) << 12;
     // round to the nearest MHz
     freq_hz += MHZ / 2;
@@ -784,6 +780,11 @@ void rtc_dig_clk8m_disable(void)
 {
     CLEAR_PERI_REG_MASK(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_DIG_CLK8M_EN_M);
     esp_rom_delay_us(DELAY_RTC_CLK_SWITCH);
+}
+
+bool rtc_dig_8m_enabled(void)
+{
+    return GET_PERI_REG_MASK(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_DIG_CLK8M_EN_M);
 }
 
 /* Name used in libphy.a:phy_chip_v7.o

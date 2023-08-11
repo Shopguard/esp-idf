@@ -35,7 +35,7 @@ from tiny_test_fw import Utility
 # features to this component.
 
 
-@ttfw_idf.idf_example_test(env_tag='Example_WIFI')
+@ttfw_idf.idf_example_test(env_tag='Example_WIFI_Protocols')
 def test_examples_protocol_http_server_advanced(env, extra_data):
     # Acquire DUT
     dut1 = env.get_dut('http_server', 'examples/protocols/http_server/advanced_tests', dut_class=ttfw_idf.ESP32DUT)
@@ -51,7 +51,7 @@ def test_examples_protocol_http_server_advanced(env, extra_data):
 
     # Parse IP address of STA
     Utility.console_log('Waiting to connect with AP')
-    got_ip = dut1.expect(re.compile(r'(?:[\s\S]*)IPv4 address: (\d+.\d+.\d+.\d+)'), timeout=30)[0]
+    got_ip = dut1.expect(re.compile(r'(?:[\s\S]*)IPv4 address: (\d+\.\d+\.\d+\.\d+)[^\d]'), timeout=30)[0]
 
     got_port = dut1.expect(re.compile(r"(?:[\s\S]*)Started HTTP server on port: '(\d+)'"), timeout=15)[0]
     result = dut1.expect(re.compile(r"(?:[\s\S]*)Max URI handlers: '(\d+)'(?:[\s\S]*)Max Open Sessions: "  # noqa: W605

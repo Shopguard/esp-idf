@@ -24,6 +24,10 @@
 
 #if CONFIG_IDF_TARGET_ESP32
 #include "esp32/ulp.h"
+#elif CONFIG_IDF_TARGET_ESP32S2
+#include "esp32s2/ulp.h"
+#elif CONFIG_IDF_TARGET_ESP32S3
+#include "esp32s3/ulp.h"
 #endif
 
 #if SOC_TOUCH_SENSOR_NUM > 0
@@ -103,6 +107,12 @@ void app_main(void)
     int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
 
     switch (esp_sleep_get_wakeup_cause()) {
+#if CONFIG_EXAMPLE_EXT0_WAKEUP
+        case ESP_SLEEP_WAKEUP_EXT0: {
+            printf("Wake up from ext0\n");
+            break;
+        }
+#endif // CONFIG_EXAMPLE_EXT0_WAKEUP
 #ifdef CONFIG_EXAMPLE_EXT1_WAKEUP
         case ESP_SLEEP_WAKEUP_EXT1: {
             uint64_t wakeup_pin_mask = esp_sleep_get_ext1_wakeup_status();
@@ -174,6 +184,18 @@ void app_main(void)
     printf("Enabling timer wakeup, %ds\n", wakeup_time_sec);
     esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000);
 
+#if CONFIG_EXAMPLE_EXT0_WAKEUP
+    const int ext_wakeup_pin_0 = 3;
+
+    printf("Enabling EXT0 wakeup on pin GPIO%d\n", ext_wakeup_pin_0);
+    esp_sleep_enable_ext0_wakeup(ext_wakeup_pin_0, 1);
+
+    // Configure pullup/downs via RTCIO to tie wakeup pins to inactive level during deepsleep.
+    // EXT0 resides in the same power domain (RTC_PERIPH) as the RTC IO pullup/downs.
+    // No need to keep that power domain explicitly, unlike EXT1.
+    rtc_gpio_pullup_dis(ext_wakeup_pin_0);
+    rtc_gpio_pulldown_en(ext_wakeup_pin_0);
+#endif // CONFIG_EXAMPLE_EXT0_WAKEUP
 #ifdef CONFIG_EXAMPLE_EXT1_WAKEUP
     const int ext_wakeup_pin_1 = 2;
     const uint64_t ext_wakeup_pin_1_mask = 1ULL << ext_wakeup_pin_1;
@@ -182,6 +204,17 @@ void app_main(void)
 
     printf("Enabling EXT1 wakeup on pins GPIO%d, GPIO%d\n", ext_wakeup_pin_1, ext_wakeup_pin_2);
     esp_sleep_enable_ext1_wakeup(ext_wakeup_pin_1_mask | ext_wakeup_pin_2_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+
+    /* If there are no external pull-up/downs, tie wakeup pins to inactive level with internal pull-up/downs via RTC IO
+     * during deepsleep. However, RTC IO relies on the RTC_PERIPH power domain. Keeping this power domain on will
+     * increase some power comsumption. */
+#  if CONFIG_EXAMPLE_EXT1_USE_INTERNAL_PULLUPS
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+    rtc_gpio_pullup_dis(ext_wakeup_pin_1);
+    rtc_gpio_pulldown_en(ext_wakeup_pin_1);
+    rtc_gpio_pullup_dis(ext_wakeup_pin_2);
+    rtc_gpio_pulldown_en(ext_wakeup_pin_2);
+#  endif //CONFIG_EXAMPLE_EXT1_USE_INTERNAL_PULLUPS
 #endif // CONFIG_EXAMPLE_EXT1_WAKEUP
 
 #ifdef CONFIG_EXAMPLE_GPIO_WAKEUP
@@ -211,7 +244,7 @@ void app_main(void)
     touch_pad_config(TOUCH_PAD_NUM9, TOUCH_THRESH_NO_USE);
     calibrate_touch_pad(TOUCH_PAD_NUM8);
     calibrate_touch_pad(TOUCH_PAD_NUM9);
-#elif CONFIG_IDF_TARGET_ESP32S2
+#elif CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3
     /* Initialize touch pad peripheral. */
     touch_pad_init();
     /* Only support one touch channel in sleep mode. */
@@ -239,15 +272,19 @@ void app_main(void)
     /* Set sleep touch pad. */
     touch_pad_sleep_channel_enable(TOUCH_PAD_NUM9, true);
     touch_pad_sleep_channel_enable_proximity(TOUCH_PAD_NUM9, false);
+    /* Reducing the operating frequency can effectively reduce power consumption. */
+    touch_pad_sleep_channel_set_work_time(1000, TOUCH_PAD_MEASURE_CYCLE_DEFAULT);
     /* Enable touch sensor clock. Work mode is "timer trigger". */
     touch_pad_set_fsm_mode(TOUCH_FSM_MODE_TIMER);
     touch_pad_fsm_start();
     vTaskDelay(100 / portTICK_RATE_MS);
-    /* read sleep touch pad value */
-    uint32_t touch_value;
+
+    /* set touchpad wakeup threshold */
+    uint32_t touch_value, wake_threshold;
     touch_pad_sleep_channel_read_smooth(TOUCH_PAD_NUM9, &touch_value);
-    touch_pad_sleep_set_threshold(TOUCH_PAD_NUM9, touch_value * 0.1); //10%
-    printf("test init: touch pad [%d] slp %d, thresh %d\n",
+    wake_threshold = touch_value * 0.1; // wakeup when touch sensor crosses 10% of background level
+    touch_pad_sleep_set_threshold(TOUCH_PAD_NUM9, wake_threshold);
+    printf("Touch pad #%d average: %d, wakeup threshold set to %d\n",
         TOUCH_PAD_NUM9, touch_value, (uint32_t)(touch_value * 0.1));
 #endif
     printf("Enabling touch pad wakeup\n");

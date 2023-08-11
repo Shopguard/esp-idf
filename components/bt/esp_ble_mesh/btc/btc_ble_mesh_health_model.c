@@ -1,16 +1,8 @@
-// Copyright 2017-2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <string.h>
 #include <errno.h>
@@ -84,7 +76,7 @@ void btc_ble_mesh_health_client_arg_deep_copy(btc_msg_t *msg, void *p_dest, void
     }
 }
 
-static void btc_ble_mesh_health_client_arg_deep_free(btc_msg_t *msg)
+void btc_ble_mesh_health_client_arg_deep_free(btc_msg_t *msg)
 {
     btc_ble_mesh_health_client_args_t *arg = NULL;
 
@@ -239,8 +231,8 @@ static void btc_ble_mesh_health_client_callback(esp_ble_mesh_health_client_cb_pa
     msg.pid = BTC_PID_HEALTH_CLIENT;
     msg.act = act;
 
-    btc_transfer_context(&msg, cb_params, sizeof(esp_ble_mesh_health_client_cb_param_t),
-                         btc_ble_mesh_health_client_copy_req_data);
+    btc_transfer_context(&msg, cb_params, cb_params == NULL ? 0 : sizeof(esp_ble_mesh_health_client_cb_param_t),
+                         btc_ble_mesh_health_client_copy_req_data, btc_ble_mesh_health_client_free_req_data);
 }
 
 void bt_mesh_health_client_cb_evt_to_btc(uint32_t opcode, uint8_t evt_type,
@@ -550,8 +542,8 @@ static void btc_ble_mesh_health_server_callback(esp_ble_mesh_health_server_cb_pa
     msg.pid = BTC_PID_HEALTH_SERVER;
     msg.act = act;
 
-    btc_transfer_context(&msg, cb_params, sizeof(esp_ble_mesh_health_server_cb_param_t),
-                         btc_ble_mesh_health_server_copy_req_data);
+    btc_transfer_context(&msg, cb_params, cb_params == NULL ? 0 : sizeof(esp_ble_mesh_health_server_cb_param_t),
+                         btc_ble_mesh_health_server_copy_req_data, btc_ble_mesh_health_server_free_req_data);
 }
 
 void btc_ble_mesh_health_server_call_handler(btc_msg_t *msg)

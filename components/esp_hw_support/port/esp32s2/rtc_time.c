@@ -1,16 +1,8 @@
-// Copyright 2015-2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdint.h>
 #include "esp_rom_sys.h"
@@ -38,16 +30,21 @@
  */
 static uint32_t rtc_clk_cal_internal_oneoff(rtc_cal_sel_t cal_clk, uint32_t slowclk_cycles)
 {
-    /* Prepare calibration */
-    REG_SET_FIELD(TIMG_RTCCALICFG_REG(0), TIMG_RTC_CALI_CLK_SEL, cal_clk);
     /* There may be another calibration process already running during we call this function,
      * so we should wait the last process is done.
      */
-    if (!GET_PERI_REG_MASK(TIMG_RTCCALICFG2_REG(0), TIMG_RTC_CALI_TIMEOUT)) {
-        if (GET_PERI_REG_MASK(TIMG_RTCCALICFG_REG(0), TIMG_RTC_CALI_START_CYCLING)) {
-            while (!GET_PERI_REG_MASK(TIMG_RTCCALICFG_REG(0), TIMG_RTC_CALI_RDY));
-        }
+    if (GET_PERI_REG_MASK(TIMG_RTCCALICFG_REG(0), TIMG_RTC_CALI_START_CYCLING)) {
+        /**
+         * Set a small timeout threshold to accelerate the generation of timeout.
+         * The internal circuit will be reset when the timeout occurs and will not affect the next calibration.
+         */
+        REG_SET_FIELD(TIMG_RTCCALICFG2_REG(0), TIMG_RTC_CALI_TIMEOUT_THRES, 1);
+        while (!GET_PERI_REG_MASK(TIMG_RTCCALICFG_REG(0), TIMG_RTC_CALI_RDY)
+               && !GET_PERI_REG_MASK(TIMG_RTCCALICFG2_REG(0), TIMG_RTC_CALI_TIMEOUT));
     }
+
+    /* Prepare calibration */
+    REG_SET_FIELD(TIMG_RTCCALICFG_REG(0), TIMG_RTC_CALI_CLK_SEL, cal_clk);
     CLEAR_PERI_REG_MASK(TIMG_RTCCALICFG_REG(0), TIMG_RTC_CALI_START_CYCLING);
     REG_SET_FIELD(TIMG_RTCCALICFG_REG(0), TIMG_RTC_CALI_MAX, slowclk_cycles);
     /* Figure out how long to wait for calibration to finish */
@@ -149,14 +146,20 @@ uint32_t rtc_clk_cal_internal(rtc_cal_sel_t cal_clk, uint32_t slowclk_cycles, ui
         } else if (slow_freq == RTC_SLOW_FREQ_8MD256) {
             cal_clk = RTC_CAL_8MD256;
         }
+    } else if (cal_clk == RTC_CAL_INTERNAL_OSC) {
+        cal_clk = RTC_CAL_RTC_MUX;
     }
+
     /* Enable requested clock (90k clock is always on) */
     int dig_32k_xtal_state = REG_GET_FIELD(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_DIG_XTAL32K_EN);
     if (cal_clk == RTC_CAL_32K_XTAL && !dig_32k_xtal_state) {
         REG_SET_FIELD(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_DIG_XTAL32K_EN, 1);
     }
 
+    bool clk8m_enabled = rtc_clk_8m_enabled();
+    bool clk8md256_enabled = rtc_clk_8md256_enabled();
     if (cal_clk == RTC_CAL_8MD256) {
+        rtc_clk_8m_enable(true, true);
         SET_PERI_REG_MASK(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_DIG_CLK8M_D256_EN);
     }
 
@@ -173,6 +176,7 @@ uint32_t rtc_clk_cal_internal(rtc_cal_sel_t cal_clk, uint32_t slowclk_cycles, ui
 
     if (cal_clk == RTC_CAL_8MD256) {
         CLEAR_PERI_REG_MASK(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_DIG_CLK8M_D256_EN);
+        rtc_clk_8m_enable(clk8m_enabled, clk8md256_enabled);
     }
 
     return cal_val;
@@ -186,11 +190,22 @@ uint32_t rtc_clk_cal_ratio(rtc_cal_sel_t cal_clk, uint32_t slowclk_cycles)
     return ratio;
 }
 
+static inline bool rtc_clk_cal_32k_valid(rtc_xtal_freq_t xtal_freq, uint32_t slowclk_cycles, uint64_t actual_xtal_cycles)
+{
+    uint64_t expected_xtal_cycles = (xtal_freq * 1000000ULL * slowclk_cycles) >> 15; // xtal_freq(hz) * slowclk_cycles / 32768
+    uint64_t delta = expected_xtal_cycles / 2000;                                    // 5/10000
+    return (actual_xtal_cycles >= (expected_xtal_cycles - delta)) && (actual_xtal_cycles <= (expected_xtal_cycles + delta));
+}
+
 uint32_t rtc_clk_cal(rtc_cal_sel_t cal_clk, uint32_t slowclk_cycles)
 {
     uint64_t xtal_cycles = rtc_clk_cal_internal(cal_clk, slowclk_cycles, RTC_TIME_CAL_ONEOFF_MODE);
-    uint32_t period = rtc_clk_xtal_to_slowclk(xtal_cycles, slowclk_cycles);
-    return period;
+
+    if ((cal_clk == RTC_CAL_32K_XTAL) && !rtc_clk_cal_32k_valid(rtc_clk_xtal_freq_get(), slowclk_cycles, xtal_cycles)) {
+        return 0;
+    }
+
+    return rtc_clk_xtal_to_slowclk(xtal_cycles, slowclk_cycles);
 }
 
 uint32_t rtc_clk_cal_cycling(rtc_cal_sel_t cal_clk, uint32_t slowclk_cycles)
