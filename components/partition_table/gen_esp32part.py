@@ -253,10 +253,10 @@ class PartitionTable(list):
                 critical('%s' % (p.to_csv()))
             raise InputError('Found multiple otadata partitions. Only one partition can be defined with type="data"(1) and subtype="ota"(0).')
 
-        if len(otadata_duplicates) == 1 and otadata_duplicates[0].size != 0x2000:
-            p = otadata_duplicates[0]
-            critical('%s' % (p.to_csv()))
-            raise InputError('otadata partition must have size = 0x2000')
+        # if len(otadata_duplicates) == 1 and otadata_duplicates[0].size != 0x2000:
+        #     p = otadata_duplicates[0]
+        #     critical('%s' % (p.to_csv()))
+        #     raise InputError('otadata partition must have size = 0x2000')
 
     def flash_size(self):
         """ Return the size that partitions will occupy in flash
