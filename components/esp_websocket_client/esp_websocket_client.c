@@ -33,7 +33,7 @@ static const char *TAG = "WEBSOCKET_CLIENT";
 #define WEBSOCKET_TCP_DEFAULT_PORT      (80)
 #define WEBSOCKET_SSL_DEFAULT_PORT      (443)
 #define WEBSOCKET_BUFFER_SIZE_BYTE      (1024)
-#define WEBSOCKET_RECONNECT_TIMEOUT_MS  (30*1000)
+#define WEBSOCKET_RECONNECT_TIMEOUT_MS  (10*1000)
 #define WEBSOCKET_TASK_PRIORITY         (5)
 #define WEBSOCKET_TASK_STACK            (4*1024)
 #define WEBSOCKET_NETWORK_TIMEOUT_MS    (10*1000)
@@ -695,7 +695,7 @@ static void esp_websocket_client_task(void *pv)
             if (read_select < 0) {
                 ESP_LOGE(TAG, "Network error: esp_transport_poll_read() returned %d, errno=%d", read_select, errno);
                 esp_websocket_client_abort_connection(client);
-                client->state = WEBSOCKET_STATE_INIT;
+                // client->state = WEBSOCKET_STATE_INIT;
             }
         } else if (WEBSOCKET_STATE_WAIT_TIMEOUT == client->state) {
             // waiting for reconnecting...
@@ -886,7 +886,7 @@ static int esp_websocket_client_send_with_opcode(esp_websocket_client_handle_t c
             ret = wlen;
             ESP_LOGE(TAG, "Network error: esp_transport_write() returned %d, errno=%d", ret, errno);
             esp_websocket_client_abort_connection(client);
-            client->state = WEBSOCKET_STATE_INIT;
+            // client->state = WEBSOCKET_STATE_INIT;
             goto unlock_and_return;
         }
         current_opcode = 0;
