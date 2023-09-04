@@ -695,6 +695,7 @@ static void esp_websocket_client_task(void *pv)
             if (read_select < 0) {
                 ESP_LOGE(TAG, "Network error: esp_transport_poll_read() returned %d, errno=%d", read_select, errno);
                 esp_websocket_client_abort_connection(client);
+                client->state = WEBSOCKET_STATE_INIT;
             }
         } else if (WEBSOCKET_STATE_WAIT_TIMEOUT == client->state) {
             // waiting for reconnecting...
@@ -885,6 +886,7 @@ static int esp_websocket_client_send_with_opcode(esp_websocket_client_handle_t c
             ret = wlen;
             ESP_LOGE(TAG, "Network error: esp_transport_write() returned %d, errno=%d", ret, errno);
             esp_websocket_client_abort_connection(client);
+            client->state = WEBSOCKET_STATE_INIT;
             goto unlock_and_return;
         }
         current_opcode = 0;
