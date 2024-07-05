@@ -92,7 +92,7 @@ esp_err_t httpd_queue_work(httpd_handle_t handle, httpd_work_fn_t work, void *ar
 
     int ret = cs_send_to_ctrl_sock(hd->msg_fd, hd->config.ctrl_port, &msg, sizeof(msg));
     if (ret < 0) {
-        ESP_LOGW(TAG, LOG_FMT("failed to queue work"));
+       // ESP_LOGW(TAG, LOG_FMT("failed to queue work"));
         return ESP_FAIL;
     }
 
@@ -453,8 +453,15 @@ esp_err_t httpd_stop(httpd_handle_t handle)
     cs_send_to_ctrl_sock(hd->msg_fd, hd->config.ctrl_port, &msg, sizeof(msg));
 
     ESP_LOGD(TAG, LOG_FMT("sent control msg to stop server"));
-    while (hd->hd_td.status != THREAD_STOPPED) {
+    
+    int max_attempts = 20; // Maximum 10 seconds wait
+    while (hd->hd_td.status != THREAD_STOPPED && max_attempts-- > 0) {
         httpd_os_thread_sleep(100);
+    }
+
+    if (hd->hd_td.status != THREAD_STOPPED) {
+        ESP_LOGE(TAG, LOG_FMT("server stop timeout"));
+        // Handle the timeout situation, e.g., force delete the server or log an error
     }
 
     /* Release global user context, if not NULL */
