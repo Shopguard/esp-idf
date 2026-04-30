@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <esp_log.h>
 #include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <assert.h>
 
 #include <esp_http_server.h>
@@ -43,7 +44,12 @@ static esp_err_t httpd_accept_conn(struct httpd_data *hd, int listen_fd)
     socklen_t addr_from_len = sizeof(addr_from);
     int new_fd = accept(listen_fd, (struct sockaddr *)&addr_from, &addr_from_len);
     if (new_fd < 0) {
-        ESP_LOGW(TAG, LOG_FMT("error in accept (%d)"), errno);
+        ESP_LOGW(TAG, LOG_FMT("error in accept (%d:%s) free=%u internal=%u largest_internal=%u"),
+                 errno,
+                 strerror(errno),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         return ESP_FAIL;
     }
     ESP_LOGD(TAG, LOG_FMT("newfd = %d"), new_fd);
@@ -60,7 +66,11 @@ static esp_err_t httpd_accept_conn(struct httpd_data *hd, int listen_fd)
     setsockopt(new_fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
 
     if (ESP_OK != httpd_sess_new(hd, new_fd)) {
-        ESP_LOGW(TAG, LOG_FMT("session creation failed"));
+        ESP_LOGW(TAG, LOG_FMT("session creation failed fd=%d free=%u internal=%u largest_internal=%u"),
+                 new_fd,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         close(new_fd);
         return ESP_FAIL;
     }
