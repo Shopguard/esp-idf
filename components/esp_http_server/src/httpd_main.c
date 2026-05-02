@@ -11,9 +11,12 @@
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <assert.h>
 
 #include <esp_http_server.h>
+#include <lwip/opt.h>
+#include <lwip/priv/tcp_priv.h>
 #include "esp_httpd_priv.h"
 #include "ctrl_sock.h"
 
@@ -23,6 +26,62 @@ typedef struct {
 } process_session_context_t;
 
 static const char *TAG = "httpd";
+
+static unsigned httpd_count_tcp_pcbs(struct tcp_pcb *pcb)
+{
+    unsigned count = 0;
+    while (pcb != NULL) {
+        count++;
+        pcb = pcb->next;
+    }
+    return count;
+}
+
+static void httpd_log_resource_state(struct httpd_data *hd, const char *event, int err)
+{
+    unsigned httpd_ws_sessions = 0;
+    unsigned httpd_plain_sessions = 0;
+
+    if (hd != NULL && hd->hd_sd != NULL) {
+        for (int i = 0; i < hd->config.max_open_sockets; i++) {
+            if (hd->hd_sd[i].fd != -1) {
+#ifdef CONFIG_HTTPD_WS_SUPPORT
+                if (hd->hd_sd[i].ws_handshake_done) {
+                    httpd_ws_sessions++;
+                } else
+#endif
+                {
+                    httpd_plain_sessions++;
+                }
+            }
+        }
+    }
+
+    ESP_LOGW(TAG,
+             LOG_FMT("%s errno=%d:%s port=%u httpd_active=%d httpd_ws=%u httpd_plain=%u httpd_max=%u backlog=%u lru=%d lwip_max_sockets=%d tcp_listen=%u tcp_bound=%u tcp_active=%u tcp_time_wait=%u free=%u internal=%u"),
+             event,
+             err,
+             strerror(err),
+             hd != NULL ? (unsigned)hd->config.server_port : 0,
+             hd != NULL ? hd->hd_sd_active_count : -1,
+             httpd_ws_sessions,
+             httpd_plain_sessions,
+             hd != NULL ? (unsigned)hd->config.max_open_sockets : 0,
+             hd != NULL ? (unsigned)hd->config.backlog_conn : 0,
+             hd != NULL ? (int)hd->config.lru_purge_enable : -1,
+             CONFIG_LWIP_MAX_SOCKETS,
+             httpd_count_tcp_pcbs(tcp_listen_pcbs.pcbs),
+             httpd_count_tcp_pcbs(tcp_bound_pcbs),
+             httpd_count_tcp_pcbs(tcp_active_pcbs),
+             httpd_count_tcp_pcbs(tcp_tw_pcbs),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+}
+
+static void httpd_log_accept_resource_state(struct httpd_data *hd, int err)
+{
+    httpd_log_resource_state(hd, "ACCEPT_RESOURCE", err);
+}
 
 static esp_err_t httpd_accept_conn(struct httpd_data *hd, int listen_fd)
 {
@@ -44,12 +103,7 @@ static esp_err_t httpd_accept_conn(struct httpd_data *hd, int listen_fd)
     socklen_t addr_from_len = sizeof(addr_from);
     int new_fd = accept(listen_fd, (struct sockaddr *)&addr_from, &addr_from_len);
     if (new_fd < 0) {
-        ESP_LOGW(TAG, LOG_FMT("error in accept (%d:%s) free=%u internal=%u largest_internal=%u"),
-                 errno,
-                 strerror(errno),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        httpd_log_accept_resource_state(hd, errno);
         return ESP_FAIL;
     }
     ESP_LOGD(TAG, LOG_FMT("newfd = %d"), new_fd);
@@ -66,11 +120,11 @@ static esp_err_t httpd_accept_conn(struct httpd_data *hd, int listen_fd)
     setsockopt(new_fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
 
     if (ESP_OK != httpd_sess_new(hd, new_fd)) {
-        ESP_LOGW(TAG, LOG_FMT("session creation failed fd=%d free=%u internal=%u largest_internal=%u"),
+        ESP_LOGW(TAG, LOG_FMT("session creation failed fd=%d free=%u internal=%u"),
                  new_fd,
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        httpd_log_accept_resource_state(hd, errno);
         close(new_fd);
         return ESP_FAIL;
     }
@@ -195,6 +249,13 @@ static int httpd_process_session(struct sock_db *session, void *context)
 /* Manage in-coming connection or data requests */
 static esp_err_t httpd_server(struct httpd_data *hd)
 {
+    static int64_t last_periodic_log_us;
+    int64_t now_us = esp_timer_get_time();
+    if (now_us - last_periodic_log_us >= 1000000) {
+        httpd_log_resource_state(hd, "PERIODIC_RESOURCE", 0);
+        last_periodic_log_us = now_us;
+    }
+
     fd_set read_set;
     FD_ZERO(&read_set);
     if (hd->config.lru_purge_enable || httpd_is_sess_available(hd)) {
