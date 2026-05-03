@@ -251,8 +251,8 @@ static esp_err_t httpd_server(struct httpd_data *hd)
 {
     static int64_t last_periodic_log_us;
     int64_t now_us = esp_timer_get_time();
-    if (now_us - last_periodic_log_us >= 1000000) {
-        httpd_log_resource_state(hd, "PERIODIC_RESOURCE", 0);
+    if (now_us - last_periodic_log_us >= 10000000) {
+        // httpd_log_resource_state(hd, "PERIODIC_RESOURCE", 0);
         last_periodic_log_us = now_us;
     }
 

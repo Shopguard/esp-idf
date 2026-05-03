@@ -454,6 +454,10 @@ esp_err_t esp_websocket_client_destroy(esp_websocket_client_handle_t client)
     }
     if (client->run) {
         esp_websocket_client_stop(client);
+    } else if (client->task_handle != NULL &&
+               client->status_bits != NULL &&
+               (xEventGroupGetBits(client->status_bits) & STOPPED_BIT) == 0) {
+        xEventGroupWaitBits(client->status_bits, STOPPED_BIT, false, true, portMAX_DELAY);
     }
     if (client->event_handle) {
         esp_event_loop_delete(client->event_handle);
@@ -721,6 +725,7 @@ static void esp_websocket_client_task(void *pv)
     esp_transport_close(client->transport);
     xEventGroupSetBits(client->status_bits, STOPPED_BIT);
     client->state = WEBSOCKET_STATE_UNKNOW;
+    client->task_handle = NULL;
     vTaskDelete(NULL);
 }
 
@@ -747,6 +752,11 @@ esp_err_t esp_websocket_client_stop(esp_websocket_client_handle_t client)
         return ESP_ERR_INVALID_ARG;
     }
     if (!client->run) {
+        if (client->task_handle != NULL &&
+            (xEventGroupGetBits(client->status_bits) & STOPPED_BIT) == 0) {
+            xEventGroupWaitBits(client->status_bits, STOPPED_BIT, false, true, portMAX_DELAY);
+            return ESP_OK;
+        }
         ESP_LOGW(TAG, "Client was not started");
         return ESP_FAIL;
     }
