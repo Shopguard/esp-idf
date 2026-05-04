@@ -55,9 +55,12 @@
 #define DHCP_OPTION_SERVER_ID    54
 #define DHCP_OPTION_INTERFACE_MTU 26
 #define DHCP_OPTION_PERFORM_ROUTER_DISCOVERY 31
+#define DHCP_OPTION_CAPTIVE_PORTAL 114
 #define DHCP_OPTION_BROADCAST_ADDRESS 28
 #define DHCP_OPTION_REQ_LIST     55
 #define DHCP_OPTION_END         255
+
+#define DHCP_CAPTIVE_PORTAL_URI "http://rms.sg/captive-portal/api"
 
 //#define USE_CLASS_B_NET 1
 #define DHCPS_DEBUG          0
@@ -392,6 +395,15 @@ static u8_t *add_offer_options(u8_t *optptr)
     *optptr++ = 0x00;
     *optptr++ = 0x00;
     *optptr++ = 0x02;
+
+    const char *captive_portal_uri = DHCP_CAPTIVE_PORTAL_URI;
+    size_t captive_portal_uri_len = strlen(captive_portal_uri);
+    if (captive_portal_uri_len <= 255) {
+        *optptr++ = DHCP_OPTION_CAPTIVE_PORTAL;
+        *optptr++ = (u8_t)captive_portal_uri_len;
+        memcpy(optptr, captive_portal_uri, captive_portal_uri_len);
+        optptr += captive_portal_uri_len;
+    }
 
     return optptr;
 }

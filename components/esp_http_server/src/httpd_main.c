@@ -27,6 +27,8 @@ typedef struct {
 
 static const char *TAG = "httpd";
 
+#define HTTPD_PERIODIC_RESOURCE_LOG_ENABLED 0
+
 static unsigned httpd_count_tcp_pcbs(struct tcp_pcb *pcb)
 {
     unsigned count = 0;
@@ -249,12 +251,14 @@ static int httpd_process_session(struct sock_db *session, void *context)
 /* Manage in-coming connection or data requests */
 static esp_err_t httpd_server(struct httpd_data *hd)
 {
+#if HTTPD_PERIODIC_RESOURCE_LOG_ENABLED
     static int64_t last_periodic_log_us;
     int64_t now_us = esp_timer_get_time();
     if (now_us - last_periodic_log_us >= 10000000) {
         httpd_log_resource_state(hd, "PERIODIC_RESOURCE", 0);
         last_periodic_log_us = now_us;
     }
+#endif
 
     fd_set read_set;
     FD_ZERO(&read_set);
