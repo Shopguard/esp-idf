@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #include <stdio.h>
+#include <errno.h>
+#include <string.h>
 
 #include "esp_websocket_client.h"
 #include "esp_transport.h"
@@ -29,6 +31,8 @@
 #include "esp_timer.h"
 
 static const char *TAG = "WEBSOCKET_CLIENT";
+
+int esp_transport_get_socket(esp_transport_handle_t t);
 
 #define WEBSOCKET_TCP_DEFAULT_PORT      (80)
 #define WEBSOCKET_SSL_DEFAULT_PORT      (443)
@@ -548,8 +552,23 @@ static esp_err_t esp_websocket_client_recv(esp_websocket_client_handle_t client)
     int rlen;
     client->payload_offset = 0;
     do {
+        int sock = esp_transport_get_socket(client->transport);
         rlen = esp_transport_read(client->transport, client->rx_buffer, client->buffer_size, client->config->network_timeout_ms);
         if (rlen < 0) {
+            int captured_errno = esp_transport_get_errno(client->transport);
+            ESP_LOGE(TAG,
+                     "WS_CLIENT_READ_FAIL client=%p sock=%d rlen=%d errno=%d captured_errno=%d errno_str=%s state=%d timeout_ms=%d payload_offset=%d payload_len=%d last_opcode=%d",
+                     client,
+                     sock,
+                     rlen,
+                     errno,
+                     captured_errno,
+                     strerror(errno),
+                     client->state,
+                     client->config->network_timeout_ms,
+                     client->payload_offset,
+                     client->payload_len,
+                     client->last_opcode);
             ESP_LOGE(TAG, "Error read data");
             return ESP_FAIL;
         }
@@ -623,6 +642,15 @@ static void esp_websocket_client_task(void *pv)
                                           client->config->host,
                                           client->config->port,
                                           client->config->network_timeout_ms) < 0) {
+                    ESP_LOGE(TAG,
+                             "WS_CLIENT_CONNECT_FAIL client=%p uri=%s host=%s port=%d errno=%d captured_errno=%d errno_str=%s",
+                             client,
+                             client->config->uri,
+                             client->config->host,
+                             client->config->port,
+                             errno,
+                             esp_transport_get_errno(client->transport),
+                             strerror(errno));
                     ESP_LOGE(TAG, "Error transport connect");
                     esp_websocket_client_abort_connection(client);
                     break;
@@ -651,6 +679,14 @@ static void esp_websocket_client_task(void *pv)
                     if ( _tick_get_ms() - client->pingpong_tick_ms > client->config->pingpong_timeout_sec*1000 ) {
                         if (client->wait_for_pong_resp) {
                             ESP_LOGE(TAG, "Error, no PONG received for more than %d seconds after PING", client->config->pingpong_timeout_sec);
+                            ESP_LOGE(TAG,
+                                     "WS_CLIENT_PONG_TIMEOUT client=%p uri=%s sock=%d wait_for_pong=%d ping_age_ms=%lld pong_age_ms=%lld",
+                                     client,
+                                     client->config->uri,
+                                     esp_transport_get_socket(client->transport),
+                                     client->wait_for_pong_resp,
+                                     (long long)(_tick_get_ms() - client->ping_tick_ms),
+                                     (long long)(_tick_get_ms() - client->pingpong_tick_ms));
                             esp_websocket_client_abort_connection(client);
                             break;
                         }
@@ -664,6 +700,14 @@ static void esp_websocket_client_task(void *pv)
                 client->ping_tick_ms = _tick_get_ms();
 
                 if (esp_websocket_client_recv(client) == ESP_FAIL) {
+                    ESP_LOGE(TAG,
+                             "WS_CLIENT_RECV_ABORT client=%p uri=%s sock=%d errno=%d captured_errno=%d state=%d",
+                             client,
+                             client->config->uri,
+                             esp_transport_get_socket(client->transport),
+                             errno,
+                             esp_transport_get_errno(client->transport),
+                             client->state);
                     ESP_LOGE(TAG, "Error receive data");
                     esp_websocket_client_abort_connection(client);
                     break;
@@ -697,6 +741,16 @@ static void esp_websocket_client_task(void *pv)
         if (WEBSOCKET_STATE_CONNECTED == client->state) {
             read_select = esp_transport_poll_read(client->transport, 1000); //Poll every 1000ms
             if (read_select < 0) {
+                ESP_LOGE(TAG,
+                         "WS_CLIENT_POLL_READ_FAIL client=%p uri=%s sock=%d ret=%d errno=%d captured_errno=%d errno_str=%s state=%d",
+                         client,
+                         client->config->uri,
+                         esp_transport_get_socket(client->transport),
+                         read_select,
+                         errno,
+                         esp_transport_get_errno(client->transport),
+                         strerror(errno),
+                         client->state);
                 ESP_LOGE(TAG, "Network error: esp_transport_poll_read() returned %d, errno=%d", read_select, errno);
                 esp_websocket_client_abort_connection(client);
                 // client->state = WEBSOCKET_STATE_INIT;

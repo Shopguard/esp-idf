@@ -640,13 +640,15 @@ esp_err_t uart_isr_register(uart_port_t uart_num, void (*fn)(void *), void *arg,
 esp_err_t uart_isr_free(uart_port_t uart_num)
 {
     esp_err_t ret;
+    uart_isr_handle_t intr_handle;
     ESP_RETURN_ON_FALSE((uart_num < UART_NUM_MAX), ESP_FAIL, UART_TAG, "uart_num error");
     ESP_RETURN_ON_FALSE((p_uart_obj[uart_num]), ESP_FAIL, UART_TAG, "uart driver error");
     ESP_RETURN_ON_FALSE((p_uart_obj[uart_num]->intr_handle != NULL), ESP_ERR_INVALID_ARG, UART_TAG, "uart driver error");
     UART_ENTER_CRITICAL(&(uart_context[uart_num].spinlock));
-    ret = esp_intr_free(p_uart_obj[uart_num]->intr_handle);
+    intr_handle = p_uart_obj[uart_num]->intr_handle;
     p_uart_obj[uart_num]->intr_handle = NULL;
     UART_EXIT_CRITICAL(&(uart_context[uart_num].spinlock));
+    ret = esp_intr_free(intr_handle);
     return ret;
 }
 
